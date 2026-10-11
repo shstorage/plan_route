@@ -1,5 +1,8 @@
 """Traceable design-rule contracts; no rule execution occurs here."""
 
+import hashlib
+import json
+from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
@@ -46,6 +49,13 @@ class RuleSource(ContractModel):
     evidence_text: str = Field(min_length=1)
 
 
+class RuleApproval(ContractModel):
+    definition_revision: int = Field(ge=1, strict=True)
+    content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    approved_by: str = Field(min_length=1)
+    approved_at: datetime
+
+
 class Constraint(ContractModel):
     id: Identifier
     type: ConstraintType
@@ -56,6 +66,42 @@ class Constraint(ContractModel):
     status: ConstraintStatus
     approved_by: str | None = None
     approved_at: str | None = None
+    definition_revision: int = Field(default=1, ge=1, strict=True)
+    approved_content_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    approval_history: list[RuleApproval] = Field(default_factory=list)
+
+    def content_sha256(self) -> str:
+        """Identity, revision and executable/source fields, excluding approvals."""
+        content = self.model_dump(
+            mode="json",
+            include={
+                "id",
+                "type",
+                "severity",
+                "scope",
+                "parameters",
+                "source",
+                "definition_revision",
+            },
+        )
+        return hashlib.sha256(
+            json.dumps(content, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    @property
+    def approval_is_current(self) -> bool:
+        # Legacy imports are accepted but explicitly identified in solve reports.
+        if self.approved_content_sha256 is None:
+            return not self.approval_history
+        if not self.approval_history:
+            return False
+        last = self.approval_history[-1]
+        return (
+            self.approved_content_sha256 == self.content_sha256() == last.content_sha256
+            and self.definition_revision == last.definition_revision
+            and self.approved_by == last.approved_by
+            and self.approved_at == last.approved_at.isoformat()
+        )
 
     @model_validator(mode="after")
     def check_parameters(self) -> "Constraint":

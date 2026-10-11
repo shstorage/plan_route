@@ -3,7 +3,20 @@
 공개 자료와 합성 3D 건물 모델을 사용하는 배관 경로 최적화 연구 도구입니다.
 실제 원전 배관 설계 또는 인허가 적합성 판단에 사용하지 않습니다.
 
-현재 구현 범위는 **P00~P08b: API 연결, EngineeringProject 스키마, 3D 격자·탐색·규칙 컴파일·독립 검증·프로젝트 저장·결과 화면·층별 2D 도면 편집기·3D 보기·필수 경유점 시퀀스**입니다.
+현재 **P00~P08c와 P10A·P10B**를 구현했습니다. 층별 2D 도면에서 배관·장애물·제약·경유점을 편집하고 3D로 확인하며,
+승인 규칙을 적용해 A* 또는 Dijkstra 경로를 계산한 뒤 원본 연속 기하로 독립 검증합니다.
+별도 CLI는 합성 장면 비교 실험과 실행별 입력·결과·환경·통계·논문용 그림을 보존합니다.
+
+| 범위 | 구현 상태 |
+| --- | --- |
+| P00~P08b | 스키마, 격자, 방향 인지 탐색, 규칙 컴파일, 독립 검증, 저장, 2D/3D UI, 순서 경유점 |
+| P08c | 자기 간섭·포트·경유점 검수, 탐색 보장 범위 표시, 규칙 내용에 연결된 승인 이력 |
+| P10A | 11개 분석적 장면, 독립 기준 비용, 44회 예비 계약 검사와 실행 보존 |
+| P10B | 개발 35개·평가 14개 합성 장면, 두 해상도, 600회 비교, 통계·PNG/PDF |
+| 다음 P10C | 규칙 변경 영향·추적성 대조 실험 — 미구현 |
+
+상세 진행 상태는 [ROADMAP](ROADMAP.md), 구현·논문 검토는
+[2026-10-11 검토 기록](docs/reviews/2026-10-11-implementation-and-thesis-review.md)에 있습니다.
 
 ## 개발 환경
 
@@ -11,8 +24,16 @@
 확인한 환경: Python 3.12.14, uv 0.12.7, Node.js 22.23.2, React 19.3.0, Vite 8.3.4.
 정확한 의존성 버전은 `uv.lock`과 `frontend/package-lock.json`을 따릅니다.
 
-새 환경에서 의존성을 복원하려면 루트에서 `uv sync --locked`,
-`frontend/`에서 `npm ci`를 실행합니다.
+새 환경에서는 Python 3.12, uv, Node.js 22.18 이상과 Git을 준비한 뒤 실행합니다.
+
+```powershell
+git clone https://github.com/shstorage/plan_route.git
+cd plan_route
+uv sync --locked
+cd frontend
+npm ci
+cd ..
+```
 
 ## 실행
 
@@ -43,13 +64,20 @@ CORS는 `http://127.0.0.1:5173`과 `http://localhost:5173`만 허용합니다.
 Vite는 5173 포트가 사용 중이면 종료하도록 설정했습니다. 다른 포트로 조용히
 이동하여 CORS 오류가 발생하는 것을 방지합니다. CORS는 인증/접근 제어가 아닙니다.
 
+Vite는 개발 중 React 화면 파일을 브라우저에 제공합니다. 화면을 실행하는 **브라우저가 FastAPI에 직접 API 요청**을 보내고,
+FastAPI가 검증·경로 계산·파일 저장을 처리합니다. 현재 데이터 저장은 JSON 파일이며 별도 DB 서버는 없습니다.
+`npm run build`는 `frontend/dist/`에 배포용 정적 파일을 만듭니다. 실제 배포에는 이 폴더를 제공하는
+정적 서버와 FastAPI 실행이 필요하며, 현재 FastAPI 앱에 정적 파일 서빙은 연결하지 않았습니다.
+
 ## 프로젝트 JSON과 입력 검증
 
-`src/plan_route/fixtures/demo_project.json`이 유일한 합성 예제 JSON입니다.
+도메인 정본 형식은 **EngineeringProject JSON**입니다. 기본 UI 예제는
+`src/plan_route/fixtures/plant_starter_project.json`, 소형 테스트 예제는
+`src/plan_route/fixtures/demo_project.json`입니다. 벤치마크도 같은 형식의 `project.json`을 생성합니다.
 좌표·치수는 m, 수직축은 z이며 `schema_version`은 현재 `1.0.0`만 지원합니다.
 규칙 출처에는 `synthetic_assumption`을 명시합니다. 이 수치는 실제 설계기준이 아닙니다.
 `draft`·`needs_review`·`rejected` 규칙도 기록할 수 있지만 라우팅 실행 대상은 아닙니다.
-P01은 규칙 실행 기능을 제공하지 않습니다.
+규칙 실행은 아래 P04 컴파일과 P05 라우팅 API에서 수행합니다.
 
 유효한 JSON 확인은 API 문서에서 `POST /api/projects/validate`의 예제 입력으로
 할 수 있습니다. PowerShell에서는 다음처럼 실행합니다.
@@ -61,7 +89,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/api/projects/validate -Method Post 
 
 정상 입력은 `{"valid":true,"project_id":"SYNTH-DEMO-001","schema_version":"1.0.0"}`을
 반환합니다. 잘못된 입력은 HTTP 422와 `error_code: INVALID_INPUT`, `details` 배열로
-필드 위치와 오류를 반환합니다. 프로젝트 저장 API는 P06 범위입니다.
+필드 위치와 오류를 반환합니다. 프로젝트 저장·불러오기는 아래 P06 API를 사용합니다.
 
 Pydantic 모델에서 JSON Schema를 다시 생성하려면 루트에서 실행합니다.
 
@@ -78,7 +106,7 @@ uv run python scripts/export_schema.py
 `world_to_grid`는 최소 경계 포함·최대 경계 제외 규칙을 사용합니다.
 `grid_to_world`는 셀 중심을 반환하며 마지막 부분 셀은 건물 경계에서 잘립니다.
 
-장애물 AABB는 배관 외경 반경과 보온 두께의 합으로 팽창합니다. 셀이 확장된
+장애물 AABB는 배관 외경 반경·보온 두께·추가 마진(`clearance_margin_m`)의 합으로 팽창합니다. 셀이 확장된
 장애물에 면·선·점으로 닿으면 보수적으로 차단됩니다. 배관 반경이 건물 밖으로
 나가지 않도록 건물 경계 셀도 검사합니다. Zone은 별도 마스크에만 기록하며
 기본 격자는 Zone 통행을 막지 않습니다. 승인된 규칙은 P04 컴파일 결과에서만 적용됩니다.
@@ -142,7 +170,7 @@ P03에서 작성한 Python 탐색 함수는 P05 라우팅 API에서 사용합니
 
 `compile_constraints(project, pipe_id)`는 대상 배관의 승인된 `KEEP_OUT`과
 `MIN_CLEARANCE` 규칙을 격자의 별도 차단 마스크로 변환합니다. 금지구역은 Zone 형상을
-배관 외경 절반과 보온 두께만큼 확장합니다. 최소 이격은 여기에 `distance_m`을 더합니다.
+배관 외경 절반·보온 두께·추가 마진만큼 확장합니다. 최소 이격은 여기에 `distance_m`을 더합니다.
 격자 셀이 확장 형상에 닿기만 해도 차단하는 보수적 근사입니다. 규칙별 영향 셀 수와
 새로 차단된 셀 수, 규칙 ID, 문서·개정판·조항·근거 문구를 결과에 남깁니다.
 
@@ -208,7 +236,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/api/routing/solve -Method Post -Con
 형식이 잘못된 ID 또는 프로젝트 JSON은 HTTP 422입니다. 저장 파일은 버전·시각·해시를
 함께 기록하며 로드 시 다시 검증합니다. 로컬 개발용 단일 프로세스 파일 저장 방식입니다.
 
-프런트 화면(`http://127.0.0.1:5173`)은 백엔드에 연결되면 합성 데모 JSON을 자동으로
+프런트 화면(`http://127.0.0.1:5173`)은 백엔드에 연결되면 합성 플랜트 시작 예제를 자동으로
 불러옵니다. `JSON 검증` → `경로 계산 실행`을 누르면 경로 길이·방향 전환·비용·위반
 건수와 세계좌표(m) 목록이 보입니다. `서버에 저장` 후 같은 프로젝트 ID로 `불러오기`를
 누르면 저장된 JSON과 개정 번호를 확인할 수 있습니다. JSON을 직접 수정했으면
@@ -280,10 +308,7 @@ JSON 텍스트 영역과 서버 저장은 같은 EngineeringProject를 사용합
 React Three Fiber(`three`, `@react-three/fiber`, `@react-three/drei`)로 2D 편집기와 **같은 EngineeringProject JSON**을
 3D로 그립니다. 메시는 JSON이 바뀔 때마다 다시 만들어지며, 메시 위치를 읽어 도메인 데이터로 저장하지 않습니다.
 
-- 축 변환은 `frontend/src/editor/RouteSequence.tsx 선택 배관의 S → 경유점 → E 순서 칩
-frontend/src/editor/roles.ts 2D/3D 공통 시작·끝·경유점 색
-tests/test_waypoints.py    경유점 스키마·순서 최적 탐색·막힘·독립 검증 테스트
-frontend/src/viewer/axes.ts`의 `worldToScene` 한 곳에만 있습니다. 세계(m, +Z 위) →
+- 축 변환은 `frontend/src/viewer/axes.ts`의 `worldToScene` 한 곳에만 있습니다. 세계(m, +Z 위) →
   Three.js 장면(+Y 위)을 `scene = (x, z, -y)`로 바꾸며 회전(행렬식 +1)이라 길이·각도·좌우가 보존됩니다.
   배율이나 원점 이동은 없으므로 장면 단위도 m입니다.
 - `viewer/scene.ts`가 JSON과 경로 결과로부터 그릴 내용(상자·Port·경로 구간)을 순수 함수로 만들고,
@@ -315,9 +340,9 @@ frontend/src/viewer/axes.ts`의 `worldToScene` 한 곳에만 있습니다. 세�
 - 메모(`note`): 토목도면 번호, 철근 탐사 결과 등 근거를 남깁니다(500자 이하). 계산에는 쓰이지 않습니다.
 - 저장 형식: `pipes[].waypoints = [{ id, position_m, pass_axis?, note? }]`. 선택 필드이므로 기존 JSON은 그대로 유효하고,
   경유점을 모두 지우면 필드가 사라져 원래 문서와 같아집니다. 경유점 ID도 프로젝트 전체에서 고유해야 합니다.
-- 탐색: A* 상태에 "지금까지 순서대로 지난 경유점 수"를 넣어 **순서 전체에서 최적인 경로**를 한 번에 찾습니다
-  (구간별로 따로 최적화해 이어 붙이지 않음). 휴리스틱은 남은 경유점을 순서대로 잇는 맨해튼 거리라 최적성이 유지되며,
-  테스트에서 Dijkstra와 같은 비용을 확인합니다. 경유점에서 꺾이는 횟수도 비용에 포함됩니다.
+- 탐색: A* 상태에 "지금까지 순서대로 지난 경유점 수"를 넣어 최초 탐색을 한 번에 수행합니다.
+  최적성은 **자기 간섭을 제외한 컴파일 격자의 목적함수**에 한정됩니다. 즉시 180도 역행은 그래프에서 제외합니다.
+  테스트에서 Dijkstra 및 별도 소형 그래프 기준 계산과 같은 비용을 확인합니다. 경유점에서 꺾이는 횟수도 비용에 포함됩니다.
 - 실패 구분: 경유점이 장애물·건물 경계 팽창·승인 규칙 영역 안이면 `WAYPOINT_BLOCKED`(409), 경유점 자체는 비어 있지만
   순서·통과 방향을 만족하는 경로가 없으면 `NO_PATH`, 격자 칸 중심에서 너무 멀면 `INVALID_INPUT`입니다.
 - 자기 간섭: 같은 배관의 떨어진 두 부분이 외곽 지름(2 × 외곽 반경, 마진 포함)보다 가까우면 실제로는 겹치는 배관입니다.
@@ -325,16 +350,125 @@ frontend/src/viewer/axes.ts`의 `worldToScene` 한 곳에만 있습니다. 세�
   이렇게 겹치면 탐색기가 경유점 구간을 **하나씩 다시** 찾으며 앞서 깐 구간의 외곽 범위를 피합니다(결과 화면에
   "구간별로 다시 탐색" 안내, 순서 전체 최적은 보장 안 됨). 그래도 피할 수 없으면(예: 끝 Port가 시작 구간에 너무 가까움)
   겹친 경로를 그대로 돌려주고 검증기가 `SELF_CLEARANCE` 위반으로 `INVALID_ROUTE`를 냅니다.
-  엘보·오프셋처럼 이어진 부분은 경로를 따라 π × 반경 이내이면 간섭으로 보지 않습니다.
+  P08c에서는 같은 방향의 공선점을 합쳐 판정하고, 인접 구간의 역행을 항상 검출합니다.
+  비역행 인접 접합부는 면제하며, 비인접 부분은 경로상 거리 `2√3 × 반경`을 넘는 점 쌍의 외곽 접촉을 검사합니다.
+  이는 연구용 꺾은선 정책이며 실제 엘보의 곡률·제작 가능성을 검사하지 않습니다.
 - 독립 검증: 연속 경로가 각 경유점을 **순서대로** 칸 대각선의 절반(`√3/2 × 격자`) 이내로 지나는지(`WAYPOINT_MISSED`),
   `pass_axis`가 있으면 그 점 앞뒤 구간이 그 축과 평행한지(`WAYPOINT_DIRECTION`) 다시 검사합니다.
 
 합성 플랜트 예제에서 PIPE-102는 경유점 없이 계산하면 WALL-A의 **문 개구부**(y≈18.75 m)로 벽을 넘습니다.
 경유점 `[30.25, 30.75, 4.75]`, 통과 방향 X를 주면 **슬리브 개구부**(y 30–31.5, z 4–5.5)로 곧게 관통하며
-독립 검증 VALID입니다(길이 39.0 → 60.0 m, 이 PC에서 약 2.7 s).
+독립 검증 VALID입니다(P08b 확인 사례: 길이 39.0 → 60.0 m). 계산 시간은 환경과 입력에 따라 달라집니다.
 
 경유점은 "반드시 여기를 지난다"는 조건입니다. 경유점이 없는 배관이 다른 틈으로 벽을 넘는 것을 막는
 "승인된 개구부로만 통과"(ROADMAP P09B `ALLOWED_PASSAGE`)와 관통부를 여러 배관이 공유하는 별도 객체는 아직 없습니다.
+
+## 연구 정확성 검수와 승인 이력 (P08c)
+
+독립 검증기는 포트 방향과 직교 경로를 검사합니다. 출발 방향은 출발 포트의 바깥 방향,
+도착 방향은 도착 포트의 바깥 방향의 반대입니다. 첫/마지막의 정확한 포트–해당 격자 중심 연결선만
+직교·방향 검사의 예외이며, 충돌 검사는 계속 적용합니다. 같은 칸 연결에 격자 본체가 없으면 방향 검사는 없습니다.
+
+경유점은 같은 방향의 공선점을 합친 구간에 순서대로 투영해 거리와 통과 축을 검사합니다.
+근처 모서리가 축 조건을 만족하지 않아도 뒤의 적합한 통과를 계속 찾습니다. 허용오차는 `√3/2 × 격자`이며
+개구부의 물리 허용오차를 뜻하지 않습니다. 반복 경유점은 같은 투영 위치를 공유할 수 있습니다.
+
+결과의 **재현 정보와 보장 범위**에서 최초 탐색/재탐색 상태, 탐색 방식, 최적성, 허용오차를 볼 수 있습니다.
+`EXACT_GRID`는 최초 격자 탐색, `HEURISTIC_LEGS`는 구간별 재탐색,
+`EXACT_GRID_RETURNED`는 재탐색 실패 후 최초 경로 반환입니다. 최종 검증 실패에는 최적성 보장이 없습니다.
+`NO_PATH`는 컴파일된 6방향 격자에서 경로가 없다는 뜻입니다. 검색 예산 초과와 연속공간 불능은 별개입니다.
+
+규칙 수정은 개정 번호를 올리고 이전 승인을 해제합니다. 상태를 **검토 대기**로 두고 수치를 수정해 적용한 뒤,
+현재 내용을 확인하고 **승인**을 선택해 검토자 이름을 입력하고 **현재 내용 승인·적용**을 누르세요.
+`POST /api/constraints/approve`가 현재 내용의 해시·개정·검토자·서버 시각을 승인 이력에 연결합니다.
+JSON에서 승인 후 내용을 바꾸면 컴파일과 검증이 차단됩니다. 저장 버튼으로 승인 이력까지 저장할 수 있습니다.
+
+이력이 없는 기존 `approved` 규칙은 호환성을 위해 실행을 허용하고 결과의 `legacy_approval_rule_ids`에 표시합니다.
+내용에 연결된 승인을 얻으려면 기존 규칙도 명시적으로 재승인하세요. 검토자 이름은 로컬 사용자 선언이며
+로그인 인증이나 변조 방지 감사 저장소를 제공하지 않습니다.
+
+자동 반례 재현: `uv run python scripts/review_regressions_20261011.py`.
+계약·정책·검수 근거는 [P08c 설계 결정](docs/decisions/0013-p08c-validation-and-approval-contract.md)을 참조하세요.
+브라우저 조작과 WebGL 시연은 별도 수동 검수가 필요합니다. 반복 실험은 아래 P10A 저장소를 사용합니다.
+
+## 예비 벤치마크 실행 (P10A)
+
+프로젝트 루트에서 실행합니다. API·Vite 서버를 켜지 않아도 동작합니다.
+
+```bash
+uv run python scripts/run_benchmark.py --seed 42 --config benchmarks/pilot.json
+```
+
+11개 소형 합성 장면을 A*와 Dijkstra로 각각 2회 계산합니다. 직선·굽힘·경유점·벽 우회·금지구역·이격·층간 이동과
+완전 차단·예산 초과·미승인을 확인합니다. 별도 그래프 기준 계산으로 비용을 대조하며 고의 손상 경로도 검사합니다.
+기본 예비 실행에서 44회 모두 예상 상태와 일치했습니다. 이 수치는 경로 성공률이나 알고리즘 우월성을 뜻하지 않습니다.
+
+명령이 출력한 `output` 폴더에서 다음 파일을 확인하세요.
+
+- `summary.json`: 완료 여부, 예상 계약 통과 수와 상태별 건수
+- `runs.csv`: Excel에서 열 수 있는 각 실행의 길이·비용·상태·단계별 시간
+- `environment.json`, `source.zip`: Git/실제 소스/환경 버전과 Python 소스 보관
+- `<case_id>/case.json`: 독립 정답 근거와 수동 그래프·가능 경로
+- `<case_id>/project.json`: 웹의 프로젝트 JSON 편집기에 붙여 넣을 EngineeringProject
+- `<case_id>/<run_id>/input.json`, `run.json`: 각 실행의 원본 입력과 상세 결과
+
+다시 실행하면 `data/benchmarks/`에 새 배치가 생기며 이전 결과를 보존합니다. 실패한 계약 검사가 있으면 종료 코드 1입니다.
+`summary.json`이 없는 폴더는 중단된 배치이며 자동 재개를 지원하지 않습니다.
+반복 수는 `benchmarks/pilot.json`의 `repeats`로 바꿀 수 있습니다. 시드는 현재 좌표 원점 이동만 바꾸므로
+다른 시드를 독립 공간 표본으로 세면 안 됩니다.
+
+웹 결과의 **경로 계산 시간**은 컴파일·탐색·검증을 포함합니다. 펼친 상세 정보에서 각 시간을 볼 수 있으며,
+저장·네트워크 시간은 제외됩니다. 기존 API 결과 파일은 같은 요청을 덮어쓰므로 논문 반복 기록에 사용하지 마세요.
+정답 범위와 11개 장면의 기준 비용은 [P10A 설계 결정](docs/decisions/0014-p10a-pilot-benchmark.md)에 기록했습니다.
+본 비교 실험은 아래 P10B에 구현했으며 규칙 변경 분석은 P10C에 남아 있습니다.
+
+## 본 비교 실험 실행 (P10B)
+
+```bash
+uv run python scripts/run_benchmark.py --config benchmarks/comparison.json
+```
+
+고정 시드의 개발 장면 35개·별도 평가 장면 14개를 각각 1 m/0.5 m 격자로 계산하고,
+A*·Dijkstra를 3회씩 반복합니다. 자기 간섭 재탐색 진단 2개를 더해 총 600회입니다.
+2026-10-11 확인 실행에서 600회 모두 기대 상태와 일치했고 성공 exact 결과의 두 알고리즘 비용 차이는 0이었습니다.
+상태는 SUCCESS 468회(휴리스틱 진단 6회 포함), NO_PATH 126회, 예상된 INVALID_ROUTE 진단 6회였습니다.
+별도 검증기 시험 8개(유효 4개·손상 경로 4개)에서는 잘못된 승인·거부가 없었습니다.
+같은 물리 공간의 해상도 비교와 반복 측정은 새 장면 수로 세지 않습니다.
+
+출력 폴더에서 `comparison_report.md`를 먼저 열면 같은 조건의 비용·시간 대조를 볼 수 있습니다.
+`scene_metrics.csv`는 반복을 장면별 중앙값으로 묶은 표이고, `comparison_statistics.json`에는
+시드 단위 bootstrap 구간·표본 수·기준 계산 적용 범위가 있습니다.
+`figures/`에는 논문에 삽입할 PNG와 PDF 3종이 생깁니다.
+
+좁은 개구부 장면은 연속 직선 경로가 있어도 1 m 격자에서 NO_PATH이고 0.5 m에서는 SUCCESS입니다.
+이번 witness 장면군의 성공률은 각각 83.3%/100%였습니다. 이 수치를 실무 건물의 성공률로 확대하지 마세요.
+평가 시드 cluster가 2개뿐이라 신뢰구간도 기술 통계로 해석합니다. 실제 시간 값은 실행 환경에 따라 달라집니다.
+
+`--seed`는 이 설정에서 실행 순서·통계 재표본화 시드를 바꿉니다. 공간 시드는 `scene_seeds`와
+`evaluation_seeds`이며 서로 겹치면 실행을 거절합니다. `--config benchmarks/pilot.json`은 기존 P10A 실행을 유지합니다.
+설계·정답·해석 한계는 [P10B 설계 결정](docs/decisions/0015-p10b-comparison-and-statistics.md)을 참조하세요.
+다음은 **P10C 규칙 변경 영향·추적성 대조 실험**입니다.
+
+## 저장 파일과 재현 범위
+
+| 위치 | 저장 방식 |
+| --- | --- |
+| `data/projects/` | 프로젝트 ID별 최신 JSON과 개정·해시. 같은 ID 저장 시 교체 |
+| `data/results/` | 요청 기반 결과 ID. 동일 요청을 재실행하면 교체 |
+| `data/benchmarks/` | 새 배치·장면·실행별 폴더를 만들어 반복 기록 보존 |
+
+이 폴더들은 Git에서 제외됩니다. 저장한 프로젝트와 측정 결과는 로컬에 남으며, 새로 clone한 환경에서는
+예제 JSON과 `benchmarks/*.json` 설정으로 다시 실행합니다. 벤치마크의 `source.zip`은 Python 소스·예제·설정·의존성
+파일 등을 보관하며 전체 프런트엔드 저장소를 대신하지 않습니다. 전체 구현은 Git 커밋으로 관리합니다.
+
+## 연구에서 아직 확인할 부분
+
+현재 결과는 합성 AABB 장면과 정해진 격자·꺾은선 정책에 한정됩니다. A* 자체의 새로움이나 실무 우월성,
+실제 배관 제작·안전·인허가 적합성을 입증하지 않습니다. 논문 차별성 후보는 승인된 구조화 규칙의 추적성과
+독립 검증을 결합한 재현 가능한 변경 분석이며, **P10C 대조 실험이 남아 있습니다**.
+
+승인된 관통부만 통과하는 `ALLOWED_PASSAGE`, Soft Constraint, 여러 배관의 상호 간섭·공동 최적화,
+CAD/IFC 내보내기는 P09의 선택 구현 범위입니다. 응력·열팽창·지지대·실제 엘보 제작 검토는 현재 제공하지 않습니다.
 
 ## 폴더 구조
 
@@ -342,11 +476,11 @@ frontend/src/viewer/axes.ts`의 `worldToScene` 한 곳에만 있습니다. 세�
 src/plan_route/main.py      FastAPI 앱과 로컬 CORS
 src/plan_route/api/health.py GET /api/health 및 응답 타입
 src/plan_route/api/projects.py 합성 예제 및 JSON 검증 API
-src/plan_route/api/constraints.py 규칙 컴파일 API
+src/plan_route/api/constraints.py 규칙 컴파일·현재 내용 승인 API
 src/plan_route/api/routing.py 경로 탐색·검증 API
 src/plan_route/models/      EngineeringProject 및 참조 검증
 src/plan_route/fixtures/    합성 예제 JSON 정본
-src/plan_route/services/    기하·격자 및 후속 알고리즘 패키지
+src/plan_route/services/    기하·탐색·규칙·검증·저장·벤치마크 구현
 src/plan_route/services/geometry.py 연속 AABB 연산·배관 반경
 src/plan_route/services/voxel_grid.py 좌표 변환·격자 마스크
 src/plan_route/services/astar.py 방향 인지형 A*·Dijkstra
@@ -355,12 +489,22 @@ src/plan_route/services/path_validator.py 독립 연속 기하 검증
 src/plan_route/services/routing.py 컴파일·탐색·검증 실행
 src/plan_route/services/report_store.py 결과 보고서 원자적 저장
 src/plan_route/services/project_store.py 프로젝트 개정·해시·원자적 저장
+src/plan_route/services/approval.py 규칙 개정·내용 해시와 승인 이력 연결
+src/plan_route/services/benchmark.py 실행 보존·환경 기록·단계별 계측
+src/plan_route/services/benchmark_cases.py 예비 벤치마크·검증기 시험
+src/plan_route/services/benchmark_scenes.py 고정 시드 비교 장면·가능 경로 근거
+src/plan_route/services/benchmark_reference.py 독립 소형 그래프 기준 계산
+src/plan_route/services/benchmark_statistics.py 장면 집계·시드 bootstrap·그림
+src/plan_route/models/benchmark.py 벤치마크 설정·장면·실행 계약
 src/plan_route/models/results.py 탐색 상태·비용 분해 결과
 frontend/src/api/client.ts  프로젝트·라우팅 API 타입 및 호출
 frontend/src/App.tsx        데모·JSON 검증·저장·경로 결과 화면·편집 기록
 frontend/src/editor/coordinates.ts 화면 px ↔ 세계좌표 m 변환·스냅·줌
 frontend/src/editor/model.ts 형상·Port·규칙 편집 순수 함수와 입력 검사
 frontend/src/editor/history.ts JSON 스냅샷 Undo/Redo
+frontend/src/editor/RulesPanel.tsx 규칙 목록·편집·검토자 입력·승인
+frontend/src/editor/RouteSequence.tsx 선택 배관의 S → 경유점 → E 순서 칩
+frontend/src/editor/roles.ts 2D/3D 공통 시작·끝·경유점 색
 frontend/src/editor/PlanEditor.tsx React Konva 층별 도면
 frontend/src/editor/EditorInspector.tsx 좌표·규칙 속성 패널
 frontend/src/editor/DomainPanel.tsx 탐색 도메인·격자, 배관 단면(외경·보온재·마진) 카드
@@ -379,9 +523,16 @@ tests/test_path_validator.py 독립 검증·라우팅 API 테스트
 tests/test_project_store.py 저장·재로드·개정·경로침입 방지 테스트
 tests/test_p07_editor_scenario.py 벽 이동 후 경로 변화 시나리오
 tests/test_plant_starter.py 플랜트 예제 라우팅·배관 마진 반영 테스트
+tests/test_waypoints.py 경유점·순서 탐색·독립 검증 테스트
+tests/test_p08c_*.py 검증 반례·독립 기준 계산·승인/결과 계약 테스트
+tests/test_benchmark*.py 실행 보존·장면·기준 비용·통계 테스트
 scripts/export_schema.py   JSON Schema 생성
+scripts/review_regressions_20261011.py 검토 반례 재현
+scripts/run_benchmark.py   예비/본 비교 실험 CLI
+benchmarks/                pilot.json·comparison.json 실행 설정
 docs/schema/               생성된 JSON Schema
 docs/decisions/            단계별 설계 결정
+docs/reviews/              구현·논문 주장 검토 기록
 ```
 
 Python 백엔드는 uv의 `src/plan_route/` 패키지로 통일합니다. `uv sync --locked`가
@@ -410,6 +561,11 @@ npm run test:viewer
 `test:editor`/`test:viewer`는 Node.js의 TypeScript 타입 제거 실행(Node 22.18+ 기본)과 `node --test`를 사용하므로
 별도 테스트 의존성이 없습니다.
 
+2026-10-11 이 문서 갱신 시 직접 실행한 검수: Python **189개**, editor **20개**, viewer **10개** 테스트 통과,
+Ruff·frontend lint·build 통과. Starlette의 TestClient 폐기 예정 경고와 Vite의 500 kB 초과 청크 경고가 남아 있습니다.
+이번 문서 갱신에서는 브라우저/WebGL 수동 검수와 600회 벤치마크를 다시 실행하지 않았으며,
+위 실험 수치는 같은 날 앞선 P10B 실행 결과입니다.
+
 API 테스트는 정상 응답, 허용/비허용 origin과 preflight, 잘못된 HTTP 메서드,
 존재하지 않는 URL, JSON 참조·단위·치수·필수 출처와 버전을 검사합니다.
 현재 설치된 Starlette는 TestClient의 httpx
@@ -417,20 +573,23 @@ API 테스트는 정상 응답, 허용/비허용 origin과 preflight, 잘못된 
 
 수동 확인:
 
-1. 두 서버를 실행하고 `http://127.0.0.1:5173`에서 `백엔드 연결됨`과 합성 데모 JSON을 확인합니다.
+기본은 합성 플랜트 예제입니다. `소형 데모`로 표시한 항목에서는 예제를 전환하고,
+PIPE-102·L2 등 플랜트 객체를 사용하는 항목에서는 플랜트 예제로 다시 전환하세요.
+
+1. 두 서버를 실행하고 `http://127.0.0.1:5173`에서 `백엔드 연결됨`과 합성 플랜트 JSON·도면을 확인합니다.
 2. `JSON 검증`, `경로 계산 실행`을 순서대로 눌러 `SUCCESS`, 길이·비용·좌표 표를 확인합니다.
 3. `서버에 저장` 후 같은 ID로 `불러오기`를 눌러 JSON과 개정 번호를 확인합니다.
 4. JSON의 `from_port_id`를 없는 ID로 바꿔 검증 오류의 필드 위치를 확인합니다.
 5. 규칙 `status`를 `draft`로 바꾸고 실행해 `UNAPPROVED_RULE` 표시를 확인합니다.
-6. (P07) `경로 계산 실행` 후 도면에 파란 경로가 보이는지 확인합니다. `WALL-01`을 드래그해 위쪽
+6. (P07, 소형 데모 선택) `경로 계산 실행` 후 도면에 파란 경로가 보이는지 확인합니다. `WALL-01`을 드래그해 위쪽
    또는 다른 위치로 옮기고, 속성 패널 좌표와 하단 커서 좌표(m)가 일치하는지 확인한 뒤 다시 실행해
    경로가 바뀌는 것을 확인합니다. `실행 취소`로 원위치, `다시 실행`으로 이동 상태를 복원합니다.
 7. (P07) 속성 패널에 X 최소를 X 최대보다 크게 넣거나 건물 밖 좌표를 넣으면 반영되지 않고 오류가 표시되는지 확인합니다.
-8. (P07) `벽 추가`로 드래그해 벽을 그리고, Delete 키로 지웁니다. `ZONE-A`를 삭제하려 하면 RULE-001 때문에 거부됩니다.
+8. (P07, 소형 데모) `벽 추가`로 드래그해 벽을 그리고, Delete 키로 지웁니다. `ZONE-A`를 삭제하려 하면 RULE-001 때문에 거부됩니다.
 9. (P07) `탐색 도메인`을 펼쳐 격자 0.1을 입력하면 칸 수 한도 초과 안내가 나오는지, X 최대를 80으로 적용하면 도면이 넓어지는지 확인합니다.
    소형 데모에서는 X 최대 8로 줄이면 PORT-B 때문에 거부됩니다.
 10. (P07) `배관 단면`에서 PIPE-102 마진을 100 mm로 적용하면 외곽 지름 394.3 mm와 단면 그림이 바뀌는지 확인합니다.
-11. (P07) 규칙 패널에서 `RULE-001` 승인 상태를 `draft`로 적용하면 도면 경고와 Zone 점선, 실행 시 `UNAPPROVED_RULE`을 확인합니다.
+11. (P07, 소형 데모) 규칙 패널에서 `RULE-001` 승인 상태를 `draft`로 적용하면 도면 경고와 Zone 점선, 실행 시 `UNAPPROVED_RULE`을 확인합니다.
 12. (P08) 3D 보기에서 `경로 계산 실행` 후 파란 원통 경로가 Port 사이에 나타나는지, 경로 좌표 표와 같은 꺾임점을 지나는지 확인합니다.
 13. (P08) `평면도`를 누르고 L2 케이블트레이(`ZONE-CABLE-L2`)를 클릭하면 2D 층이 L2로 바뀌고 속성 패널에 같은 ID가 나오는지 확인합니다.
 14. (P08) 속성 패널에서 그 Zone의 Y 최소/최대를 30/31로 적용하면 3D에서도 북쪽으로 이동하고 카메라는 그대로인지 확인합니다.
@@ -443,7 +602,7 @@ API 테스트는 정상 응답, 허용/비허용 origin과 preflight, 잘못된 
 19. PIPE-103(층간)을 계산하면 L1 층 버튼과 L2 버튼 모두에 경로 점이, L1 도면의 수직 구간 위치에 `↑ L2`가, L2에서는 `↓ L1`이
     나오는지, 3D 원점에 X·Y·Z 라벨이 모두 보이는지 확인합니다.
 20. PIPE-102를 고르고 `+ 규칙 추가` → 최소 이격 1.5 m, 대상 WALL-A2, 출처 입력 → `초안 규칙 만들기`. 요약에 실행 차단 안내가 나오고,
-    승인으로 바꿔 `규칙 적용` 후 계산하면 결과의 적용 규칙에 새 규칙과 RULE-ELEC-KEEPOUT이 함께 나오는지 확인합니다.
+    승인으로 바꿔 검토자 이름을 입력하고 `현재 내용 승인·적용` 후 계산하면 결과의 적용 규칙에 새 규칙과 RULE-ELEC-KEEPOUT이 함께 나오는지 확인합니다.
 
 health는 API 프로세스 응답만 확인하며 solver나 데이터 저장소의 준비 상태를
 보장하지 않습니다. 경로·규칙 검증은 별도 결과에 표시됩니다.

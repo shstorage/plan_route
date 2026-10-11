@@ -1,8 +1,9 @@
 """Direction-aware deterministic 6-neighbour A* and Dijkstra grid search.
 
 A search state is (i, j, k, incoming direction, visited waypoint count). The
-waypoint count makes ordered mandatory waypoints part of one exact search, so
-the returned route is optimal over the whole sequence, not leg by leg.
+waypoint count makes ordered mandatory waypoints part of one exact search.
+Its optimum covers the compiled grid objective with immediate reversals
+excluded; self-clearance and continuous-space feasibility are not guaranteed.
 
 That exact search does not remember which cells it already used, so with
 waypoints it can fold back beside (or onto) itself. When the found route comes
@@ -13,14 +14,20 @@ feasible more often but no longer guaranteed optimal.
 
 from heapq import heappop, heappush
 from itertools import count
-from math import ceil, dist, isfinite, pi, sqrt
+from math import ceil, dist, isfinite, sqrt
 from time import perf_counter
 from typing import Literal
 
 from plan_route.models.constraints import ConstraintStatus
 from plan_route.models.engineering import EngineeringProject, Port
 from plan_route.models.geometry import GridIndex, Point3
-from plan_route.models.results import CostBreakdown, RouteSearchResult, RouteStatus
+from plan_route.models.results import (
+    CostBreakdown,
+    OptimalityGuarantee,
+    RouteSearchResult,
+    RouteStatus,
+    SearchMode,
+)
 from plan_route.services.compiler import (
     CompilationResult,
     CompilationStatus,
@@ -70,6 +77,13 @@ def _return_result(
     bend_count: int | None = None,
     cost_breakdown: CostBreakdown | None = None,
     applied_rule_ids: tuple[str, ...] = (),
+    search_mode: SearchMode = SearchMode.NOT_RUN,
+    optimality_guarantee: OptimalityGuarantee = OptimalityGuarantee.NONE,
+    initial_search_status: RouteStatus | None = None,
+    fallback_reason: Literal["SELF_CLEARANCE"] | None = None,
+    fallback_status: RouteStatus | None = None,
+    initial_expanded_states: int = 0,
+    fallback_expanded_states: int = 0,
 ) -> RouteSearchResult:
     return RouteSearchResult(
         status=status,
@@ -84,6 +98,13 @@ def _return_result(
         runtime_ms=(perf_counter() - started_at) * 1000,
         message=message,
         applied_rule_ids=applied_rule_ids,
+        search_mode=search_mode,
+        optimality_guarantee=optimality_guarantee,
+        initial_search_status=initial_search_status,
+        fallback_reason=fallback_reason,
+        fallback_status=fallback_status,
+        initial_expanded_states=initial_expanded_states,
+        fallback_expanded_states=fallback_expanded_states,
     )
 
 
@@ -98,8 +119,8 @@ def _chain(final_state: State, previous: dict[State, State]) -> list[State]:
 def _self_conflicts(grid: VoxelGrid, states: list[State], radius: float) -> bool:
     """True if two parts of the route come within one envelope diameter.
 
-    Pairs whose separation along the route is at most pi x radius (elbows,
-    offsets) are exempt, mirroring the validator's SELF_CLEARANCE rule.
+    Discrete trigger only. Arc separation <= 2*sqrt(3)*radius is exempt;
+    the independent validator checks continuous pairs and canonical joints.
     """
     points = [grid.spec.grid_to_world(state[:3]) for state in states]
     arcs = [0.0]
@@ -118,7 +139,7 @@ def _self_conflicts(grid: VoxelGrid, states: list[State], radius: float) -> bool
                         (index[0] + di, index[1] + dj, index[2] + dk), ()
                     ):
                         if (
-                            arcs[position] - arcs[other] > pi * radius + 1e-9
+                            arcs[position] - arcs[other] > 2 * sqrt(3) * radius + 1e-9
                             and dist(points[position], points[other]) <= reach
                         ):
                             return True
@@ -131,7 +152,7 @@ def _avoid_cells(grid: VoxelGrid, laid: list[State], radius: float) -> set[GridI
 
     A cell is blocked if it lies within one envelope diameter of a laid cell
     and even the shortest continuation from the junction would be more than
-    pi x radius along the route away from that cell (so the pair would be a
+    2*sqrt(3)*radius along the route away from that cell (so the pair would be a
     self-clearance conflict, not an elbow).
     """
     points = [grid.spec.grid_to_world(state[:3]) for state in laid]
@@ -157,7 +178,7 @@ def _avoid_cells(grid: VoxelGrid, laid: list[State], radius: float) -> set[GridI
                     ahead = sum(
                         abs(a - b) for a, b in zip(centre, junction, strict=True)
                     )
-                    if behind + ahead > pi * radius + 1e-9:
+                    if behind + ahead > 2 * sqrt(3) * radius + 1e-9:
                         blocked.add(cell)
     return blocked
 
@@ -174,6 +195,10 @@ def _result_for_path(
     expanded_states: int,
     applied_rule_ids: tuple[str, ...],
     message: str = "",
+    *,
+    search_mode: SearchMode = SearchMode.EXACT_GRID,
+    initial_expanded_states: int | None = None,
+    fallback_status: RouteStatus | None = None,
 ) -> RouteSearchResult:
     indices = tuple((state[0], state[1], state[2]) for state in states)
     grid_points = tuple(grid.spec.grid_to_world(index) for index in indices)
@@ -213,6 +238,27 @@ def _result_for_path(
         bend_count=bends,
         cost_breakdown=breakdown,
         applied_rule_ids=applied_rule_ids,
+        search_mode=search_mode,
+        optimality_guarantee=(
+            OptimalityGuarantee.NONE
+            if search_mode is SearchMode.HEURISTIC_LEGS
+            else OptimalityGuarantee.GRID_OBJECTIVE_EXCLUDING_SELF_CLEARANCE
+        ),
+        initial_search_status=RouteStatus.SUCCESS,
+        fallback_reason=(
+            None if search_mode is SearchMode.EXACT_GRID else "SELF_CLEARANCE"
+        ),
+        fallback_status=fallback_status,
+        initial_expanded_states=(
+            expanded_states
+            if initial_expanded_states is None
+            else initial_expanded_states
+        ),
+        fallback_expanded_states=(
+            0
+            if initial_expanded_states is None
+            else expanded_states - initial_expanded_states
+        ),
     )
 
 
@@ -445,9 +491,10 @@ def solve_route(
             and waypoint_axes[visited - 1] is not None
         )
 
-    start_state: State = (*start, _NO_DIRECTION, advance(start, _NO_DIRECTION, 0))
     first_direction = _PORT_DIRECTIONS[source.orientation]
     arrival_direction = _PORT_DIRECTIONS[target.orientation] ^ 1
+    # A waypoint at the source has a one-sided pass in the departing direction.
+    start_state: State = (*start, _NO_DIRECTION, advance(start, first_direction, 0))
 
     def heuristic(index: GridIndex, visited: int, stop: int | None) -> float:
         if algorithm == "dijkstra":
@@ -495,6 +542,8 @@ def solve_route(
             expanded += 1
             centre = grid.spec.grid_to_world(index)
             for direction, offset in enumerate(_DIRECTIONS):
+                if state[3] != _NO_DIRECTION and direction == (state[3] ^ 1):
+                    continue  # Immediate 180-degree retracing is not a route joint.
                 if state[3] == _NO_DIRECTION and direction != first_direction:
                     continue
                 if direction != state[3] and locked_direction(
@@ -529,7 +578,13 @@ def solve_route(
         return "none", [], expanded
 
     def finish(
-        states: list[State], expanded: int, message: str = ""
+        states: list[State],
+        expanded: int,
+        message: str = "",
+        *,
+        search_mode: SearchMode = SearchMode.EXACT_GRID,
+        initial_expanded: int | None = None,
+        fallback_status: RouteStatus | None = None,
     ) -> RouteSearchResult:
         return _result_for_path(
             states,
@@ -543,6 +598,9 @@ def solve_route(
             expanded,
             applied_rule_ids,
             message,
+            search_mode=search_mode,
+            initial_expanded_states=initial_expanded,
+            fallback_status=fallback_status,
         )
 
     outcome, states, expanded = search(start_state, None, set(), limit)
@@ -555,6 +613,9 @@ def solve_route(
             expanded,
             "search expansion limit reached",
             applied_rule_ids=applied_rule_ids,
+            search_mode=SearchMode.EXACT_GRID,
+            initial_search_status=RouteStatus.SEARCH_LIMIT_REACHED,
+            initial_expanded_states=expanded,
         )
     if outcome == "none":
         return _return_result(
@@ -565,6 +626,9 @@ def solve_route(
             expanded,
             "no route exists in the compiled grid",
             applied_rule_ids=applied_rule_ids,
+            search_mode=SearchMode.EXACT_GRID,
+            initial_search_status=RouteStatus.NO_PATH,
+            initial_expanded_states=expanded,
         )
     radius = effective_pipe_radius_m(pipe)
     if not waypoint_count or not _self_conflicts(grid, states, radius):
@@ -591,6 +655,13 @@ def solve_route(
                 total,
                 "route legs overlap and leg-by-leg re-search failed "
                 f"({reason}); returning the overlapping optimal route",
+                search_mode=SearchMode.EXACT_GRID_RETURNED,
+                initial_expanded=expanded,
+                fallback_status=(
+                    RouteStatus.SEARCH_LIMIT_REACHED
+                    if leg_outcome == "limit"
+                    else RouteStatus.NO_PATH
+                ),
             )
         laid.extend(leg[1:])
         if stop is None:
@@ -600,4 +671,7 @@ def solve_route(
         total,
         "route legs overlapped; legs were re-searched one at a time avoiding "
         "earlier legs (no longer guaranteed optimal over the sequence)",
+        search_mode=SearchMode.HEURISTIC_LEGS,
+        initial_expanded=expanded,
+        fallback_status=RouteStatus.SUCCESS,
     )

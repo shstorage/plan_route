@@ -50,6 +50,12 @@ export interface Constraint {
   status: 'draft' | 'needs_review' | 'approved' | 'rejected'
   approved_by?: string | null
   approved_at?: string | null
+  definition_revision?: number
+  approved_content_sha256?: string | null
+  approval_history?: Array<{
+    definition_revision: number; content_sha256: string
+    approved_by: string; approved_at: string
+  }>
 }
 
 export interface EngineeringProject {
@@ -125,6 +131,15 @@ export interface RouteViolation {
 }
 
 export interface RouteSolveReport {
+  search_mode: 'NOT_RUN' | 'EXACT_GRID' | 'HEURISTIC_LEGS' | 'EXACT_GRID_RETURNED'
+  optimality_guarantee: 'NONE' | 'GRID_OBJECTIVE_EXCLUDING_SELF_CLEARANCE'
+  feasibility_domain: 'COMPILED_GRID_6_NEIGHBOUR'
+  initial_search_status: string | null
+  fallback_reason: string | null
+  fallback_status: string | null
+  initial_expanded_states: number
+  fallback_expanded_states: number
+  legacy_approval_rule_ids: string[]
   status:
     | 'SUCCESS'
     | 'NO_PATH'
@@ -147,10 +162,19 @@ export interface RouteSolveReport {
   } | null
   expanded_states: number
   runtime_ms: number
+  timings?: {
+    compile_ms: number
+    search_ms: number
+    validate_ms: number
+    total_ms: number
+  } | null
   applied_rule_ids: string[]
   scenario_hash: string
   result_id: string | null
   validation: {
+    validation_contract: string
+    self_clearance_policy: string
+    waypoint_tolerance_m: number | null
     status: string
     checked_segments: number
     violations: RouteViolation[]
@@ -277,4 +301,10 @@ export async function solveRoute(project: unknown, pipeId: string): Promise<Rout
     jsonRequest({ project, pipe_id: pipeId }),
     true,
   )
+}
+
+export async function approveRule(project: EngineeringProject, ruleId: string, reviewer: string): Promise<EngineeringProject> {
+  return requireProject(await requestJson('/api/constraints/approve', jsonRequest({
+    project, rule_id: ruleId, approved_by: reviewer,
+  })))
 }

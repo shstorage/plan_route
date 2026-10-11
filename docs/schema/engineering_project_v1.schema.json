@@ -76,6 +76,13 @@
     "Constraint": {
       "additionalProperties": false,
       "properties": {
+        "approval_history": {
+          "items": {
+            "$ref": "#/$defs/RuleApproval"
+          },
+          "title": "Approval History",
+          "type": "array"
+        },
         "approved_at": {
           "anyOf": [
             {
@@ -99,6 +106,25 @@
           ],
           "default": null,
           "title": "Approved By"
+        },
+        "approved_content_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approved Content Sha256"
+        },
+        "definition_revision": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Definition Revision",
+          "type": "integer"
         },
         "id": {
           "minLength": 1,
@@ -499,6 +525,39 @@
         "search_limits"
       ],
       "title": "RoutingConfig",
+      "type": "object"
+    },
+    "RuleApproval": {
+      "additionalProperties": false,
+      "properties": {
+        "approved_at": {
+          "format": "date-time",
+          "title": "Approved At",
+          "type": "string"
+        },
+        "approved_by": {
+          "minLength": 1,
+          "title": "Approved By",
+          "type": "string"
+        },
+        "content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "definition_revision": {
+          "minimum": 1,
+          "title": "Definition Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "definition_revision",
+        "content_sha256",
+        "approved_by",
+        "approved_at"
+      ],
+      "title": "RuleApproval",
       "type": "object"
     },
     "RuleParameters": {

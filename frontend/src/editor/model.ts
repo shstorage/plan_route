@@ -408,6 +408,19 @@ export function updateRule(project: EngineeringProject, ruleId: string, edit: Ru
     approved_by: edit.status === 'approved' ? rule.approved_by : null,
     approved_at: edit.status === 'approved' ? rule.approved_at : null,
   }
+  const definitionChanged = rule.type !== changed.type
+    || JSON.stringify(rule.scope) !== JSON.stringify(changed.scope)
+    || (rule.parameters.distance_m ?? null) !== (changed.parameters.distance_m ?? null)
+    || (rule.parameters.distance_basis ?? null) !== (changed.parameters.distance_basis ?? null)
+  if (definitionChanged) {
+    changed.definition_revision = (rule.definition_revision ?? 1) + 1
+  }
+  if (definitionChanged || (edit.status === 'approved' && rule.status !== 'approved')) {
+    changed.status = edit.status === 'rejected' ? 'rejected' : 'needs_review'
+    changed.approved_by = null
+    changed.approved_at = null
+    changed.approved_content_sha256 = null
+  }
   return { ...project, constraints: project.constraints.map((item) => item.id === ruleId ? changed : item) }
 }
 

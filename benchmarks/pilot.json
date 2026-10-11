@@ -1,0 +1,5 @@
+{
+  "seed": 42,
+  "repeats": 2,
+  "algorithms": ["astar", "dijkstra"]
+}

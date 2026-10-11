@@ -1,15 +1,30 @@
 """HTTP interface for compiling approved hard rules for one pipe."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from plan_route.models.constraints import ConstraintType, RuleSource
 from plan_route.models.engineering import EngineeringProject
 from plan_route.models.geometry import Identifier
+from plan_route.services.approval import approve_rule
 from plan_route.services.compiler import CompilationStatus, compile_constraints
 
 router = APIRouter(prefix="/api/constraints", tags=["constraints"])
+
+
+class ApprovalRequest(BaseModel):
+    project: EngineeringProject
+    rule_id: Identifier
+    approved_by: str = Field(min_length=1, max_length=100)
+
+
+@router.post("/approve", response_model=EngineeringProject)
+def approve_project_rule(request: ApprovalRequest) -> EngineeringProject:
+    try:
+        return approve_rule(request.project, request.rule_id, request.approved_by)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 class CompileRequest(BaseModel):

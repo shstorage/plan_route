@@ -87,6 +87,21 @@ test('rule editing covers several pipes and targets and requires a distance for 
   assert.throws(() => updateRule(original, 'RULE-001', { ...base, targetIds: ['WALL-01', 'WALL-01'], distanceText: '1' }), /두 번/)
 })
 
+test('editing an approved definition clears approval and increments revision', () => {
+  const original = project()
+  const changed = updateRule(original, 'RULE-001', {
+    type: 'MIN_CLEARANCE', status: 'approved', pipeIds: ['PIPE-101'],
+    targetIds: ['WALL-01'], distanceText: '0.3',
+  })
+  const rule = changed.constraints[0]
+  assert.equal(rule.status, 'needs_review')
+  assert.equal(rule.definition_revision, 2)
+  assert.equal(rule.approved_by, null)
+  assert.equal(rule.approved_at, null)
+  assert.equal(rule.approved_content_sha256, null)
+  assert.equal(original.constraints[0].status, 'approved')
+})
+
 test('new rules require real provenance and remain draft until explicitly approved', () => {
   const original = project()
   const input = {

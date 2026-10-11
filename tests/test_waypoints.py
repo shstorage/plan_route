@@ -211,6 +211,17 @@ def test_search_limit_with_waypoints(open_data):
     assert solve(open_data, max_expansions=3).status is RouteStatus.SEARCH_LIMIT_REACHED
 
 
+def test_source_goal_and_duplicate_cell_waypoints_have_one_sided_passes(open_data):
+    open_data["pipes"][0]["waypoints"] = [
+        waypoint("WP-S", START, "x"),
+        waypoint("WP-S2", START, "x"),
+        waypoint("WP-E", GOAL, "x"),
+    ]
+    report = solve(open_data)
+    assert report.status == "SUCCESS", report.message
+    assert report.search_mode == "EXACT_GRID"
+
+
 @pytest.mark.parametrize(
     ("change", "message"),
     [
@@ -239,6 +250,8 @@ def test_duplicate_waypoint_ids_across_pipes_are_rejected(open_data):
 
 
 def test_validator_checks_waypoint_order_and_direction_on_continuous_path(open_data):
+    # These manually supplied polylines arrive along -y, so the port faces +y.
+    open_data["equipment"][1]["ports"][0]["orientation"] = "+y"
     first, second = (2.25, 4.75, 1.25), (5.75, 4.75, 1.25)
     open_data["pipes"][0]["waypoints"] = [
         waypoint("WP-1", first),
@@ -343,6 +356,23 @@ def test_overlapping_waypoint_legs_are_re_searched_apart(open_data):
     assert report.status is RouteStatus.SUCCESS
     assert report.validation.status is ValidationStatus.VALID
     assert len(set(report.points_m)) == len(report.points_m), "no cell is reused"
+    assert report.search_mode == "HEURISTIC_LEGS"
+    assert report.optimality_guarantee == "NONE"
+    assert report.fallback_reason == "SELF_CLEARANCE"
+    assert report.fallback_status == "SUCCESS"
+    assert report.expanded_states == (
+        report.initial_expanded_states + report.fallback_expanded_states
+    )
+    limited = route_project(
+        project,
+        "PIPE-101",
+        max_expansions=report.initial_expanded_states,
+    )
+    assert limited.status == "INVALID_ROUTE"
+    assert limited.search_mode == "EXACT_GRID_RETURNED"
+    assert limited.initial_search_status == "SUCCESS"
+    assert limited.fallback_status == "SEARCH_LIMIT_REACHED"
+    assert limited.optimality_guarantee == "NONE"
 
 
 def test_unavoidable_self_overlap_is_reported_not_hidden(open_data):
@@ -357,3 +387,4 @@ def test_unavoidable_self_overlap_is_reported_not_hidden(open_data):
     assert report.status is RouteStatus.INVALID_ROUTE
     assert any(item.code == "SELF_CLEARANCE" for item in report.validation.violations)
     assert report.points_m, "the overlapping route is still returned for inspection"
+    assert report.optimality_guarantee == "NONE"

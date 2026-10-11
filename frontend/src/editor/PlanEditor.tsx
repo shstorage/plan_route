@@ -28,6 +28,7 @@ type Props = {
   onUndo: () => void
   onRedo: () => void
   onCommit: (project: EngineeringProject) => void
+  onApproveRule: (project: EngineeringProject, ruleId: string, reviewer: string) => void
   onSelectPipe: (pipeId: string) => void
 }
 
@@ -37,7 +38,7 @@ const HEIGHT = 540
 const corners: Corner[] = ['nw', 'ne', 'sw', 'se']
 
 export function PlanEditor({
-  project, route, selectedPipeId, selection, onSelectionChange: setSelection, focusRuleId, onFocusRule, busy, canUndo, canRedo, onUndo, onRedo, onCommit, onSelectPipe,
+  project, route, selectedPipeId, selection, onSelectionChange: setSelection, focusRuleId, onFocusRule, busy, canUndo, canRedo, onUndo, onRedo, onCommit, onSelectPipe, onApproveRule,
 }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
@@ -419,6 +420,7 @@ export function PlanEditor({
         project={project} selectedPipeId={selectedPipeId} busy={busy}
         focusRuleId={focusRuleId} onFocusRule={onFocusRule} newRuleRequest={newRuleRequest}
         onCommit={commit}
+        onApproveRule={onApproveRule}
       />
     </section>
   )

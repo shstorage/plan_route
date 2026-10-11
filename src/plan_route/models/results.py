@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import Field
 
@@ -19,6 +20,18 @@ class RouteStatus(StrEnum):
     RULE_CONFLICT = "RULE_CONFLICT"
     INVALID_ROUTE = "INVALID_ROUTE"
     WAYPOINT_BLOCKED = "WAYPOINT_BLOCKED"
+
+
+class SearchMode(StrEnum):
+    NOT_RUN = "NOT_RUN"
+    EXACT_GRID = "EXACT_GRID"
+    HEURISTIC_LEGS = "HEURISTIC_LEGS"
+    EXACT_GRID_RETURNED = "EXACT_GRID_RETURNED"
+
+
+class OptimalityGuarantee(StrEnum):
+    NONE = "NONE"
+    GRID_OBJECTIVE_EXCLUDING_SELF_CLEARANCE = "GRID_OBJECTIVE_EXCLUDING_SELF_CLEARANCE"
 
 
 @dataclass(frozen=True)
@@ -45,6 +58,13 @@ class RouteSearchResult:
     runtime_ms: float
     message: str
     applied_rule_ids: tuple[str, ...] = ()
+    search_mode: SearchMode = SearchMode.NOT_RUN
+    optimality_guarantee: OptimalityGuarantee = OptimalityGuarantee.NONE
+    initial_search_status: RouteStatus | None = None
+    fallback_reason: Literal["SELF_CLEARANCE"] | None = None
+    fallback_status: RouteStatus | None = None
+    initial_expanded_states: int = 0
+    fallback_expanded_states: int = 0
 
 
 class ValidationStatus(StrEnum):
@@ -75,6 +95,16 @@ class PathValidationResult(ContractModel):
     checked_segments: int = 0
     violations: list[PathViolation] = Field(default_factory=list)
     message: str = ""
+    validation_contract: str = "orthogonal_core_canonical_connectors_v2"
+    self_clearance_policy: str = "straight_runs_arc_2sqrt3_radius_v2"
+    waypoint_tolerance_m: float | None = None
+
+
+class StageTimings(ContractModel):
+    compile_ms: float = Field(ge=0)
+    search_ms: float = Field(ge=0)
+    validate_ms: float = Field(ge=0)
+    total_ms: float = Field(ge=0)
 
 
 class RouteSolveReport(ContractModel):
@@ -90,9 +120,21 @@ class RouteSolveReport(ContractModel):
     cost_breakdown: CostBreakdown | None = None
     expanded_states: int
     runtime_ms: float
+    timings: StageTimings | None = None
     applied_rule_ids: list[str] = Field(default_factory=list)
     scenario_hash: str
     result_id: str | None = None
     validation: PathValidationResult | None = None
     message: str = ""
-    qa_validator: str = "continuous_segment_aabb_v1"
+    qa_validator: str = "continuous_geometry_v2"
+    legacy_approval_rule_ids: list[str] = Field(default_factory=list)
+    search_mode: SearchMode = SearchMode.NOT_RUN
+    optimality_guarantee: OptimalityGuarantee = OptimalityGuarantee.NONE
+    feasibility_domain: Literal["COMPILED_GRID_6_NEIGHBOUR"] = (
+        "COMPILED_GRID_6_NEIGHBOUR"
+    )
+    initial_search_status: RouteStatus | None = None
+    fallback_reason: Literal["SELF_CLEARANCE"] | None = None
+    fallback_status: RouteStatus | None = None
+    initial_expanded_states: int = 0
+    fallback_expanded_states: int = 0

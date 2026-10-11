@@ -82,6 +82,11 @@ def test_margin_enlarges_envelope_for_grid_and_validator():
     # Detour 0.6 m below the building's north face: clear for the bare
     # insulated pipe, a violation once the 0.6 m margin is added.
     points = ((1, 2, 1), (1, 9.4, 1), (11, 9.4, 1), (11, 2, 1))
+    # The manual detour departs +y and arrives -y.
+    for project in (base, wide):
+        for equipment in project.equipment:
+            for port in equipment.ports:
+                port.orientation = "+y"
     assert validate_path(base, "PIPE-101", points).status is ValidationStatus.VALID
     report = validate_path(wide, "PIPE-101", points)
     assert report.status is ValidationStatus.INVALID_ROUTE

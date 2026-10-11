@@ -19,3 +19,4 @@ wheels/
 htmlcov/
 data/results/
 data/projects/
+data/benchmarks/

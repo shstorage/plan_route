@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import {
   API_BASE_URL,
   ApiError,
+  approveRule,
   exampleLabels,
   getExampleProject,
   getHealth,
@@ -34,7 +35,7 @@ type Notice = {
   details?: ValidationIssue[]
 }
 
-type Operation = 'demo' | 'validate' | 'solve' | 'save' | 'load' | null
+type Operation = 'demo' | 'validate' | 'solve' | 'save' | 'load' | 'approve' | null
 
 type ProjectOverview = {
   id: string
@@ -74,6 +75,8 @@ const violationText: Record<string, string> = {
   OBSTACLE_COLLISION: '장애물 충돌',
   BUILDING_BOUNDARY: '건물 경계',
   ENDPOINT_MISMATCH: '끝점 불일치',
+  PORT_DIRECTION: '포트 연결 방향 불일치',
+  NON_ORTHOGONAL: '직교 경로 위반',
   KEEP_OUT: '진입 금지',
   MIN_CLEARANCE: '최소 이격',
   WAYPOINT_MISSED: '경유점 누락',
@@ -320,6 +323,11 @@ function App() {
             onUndo={undoEditor}
             onRedo={redoEditor}
             onCommit={commitEditorProject}
+            onApproveRule={(project, ruleId, reviewer) => {
+              void run('approve', async () => {
+                commitEditorProject(await approveRule(project, ruleId, reviewer))
+              })
+            }}
             onSelectPipe={(pipeId) => { setSelectedPipeId(pipeId); setRoute(null) }}
           />
         ) : <section className="panel editor-placeholder"><p className="step">02 / PLAN EDITOR</p><h2>도면 준비 중</h2><p>예제를 불러오거나 수정한 JSON을 검증하면 층별 배치도가 나타납니다.</p></section>}
@@ -467,7 +475,7 @@ function App() {
                   </div>
                   <div className="result-details">
                     <div><span>탐색한 상태</span><strong>{route.expanded_states.toLocaleString('ko-KR')}</strong></div>
-                    <div><span>실행 시간</span><strong>{formatNumber(route.runtime_ms, 1)} ms</strong></div>
+                    <div><span>경로 계산 시간</span><strong>{formatNumber(route.timings?.total_ms ?? route.runtime_ms, 1)} ms</strong></div>
                     <div><span>적용 규칙</span><strong>{route.applied_rule_ids.join(', ') || '없음'}</strong></div>
                     <div><span>독립 검증</span><strong>{route.validation?.status ?? '미실행'}</strong></div>
                   </div>
@@ -487,7 +495,10 @@ function App() {
                       </tbody></table></div>
                     </div>
                   )}
-                  <details className="provenance"><summary>재현 정보</summary><dl><dt>시나리오 해시</dt><dd>{route.scenario_hash}</dd><dt>결과 ID</dt><dd>{route.result_id ?? '—'}</dd><dt>알고리즘</dt><dd>{route.algorithm}</dd></dl></details>
+                  <details className="provenance"><summary>재현 정보와 보장 범위</summary><dl><dt>시나리오 해시</dt><dd>{route.scenario_hash}</dd><dt>결과 ID</dt><dd>{route.result_id ?? '—'}</dd><dt>알고리즘</dt><dd>{route.algorithm}</dd><dt>탐색 방식</dt><dd>{route.search_mode}</dd><dt>최적성</dt><dd>{route.optimality_guarantee === 'GRID_OBJECTIVE_EXCLUDING_SELF_CLEARANCE' ? '자기 간섭을 제외한 격자 목적함수에서 최적' : '보장 없음'}</dd><dt>최초 탐색 / 재탐색</dt><dd>{route.initial_search_status ?? '미실행'} / {route.fallback_status ?? '미실행'}</dd><dt>계산 범위</dt><dd>컴파일된 6방향 격자. NO_PATH는 연속공간의 불가능을 뜻하지 않습니다.</dd><dt>경유점 허용오차</dt><dd>{route.validation?.waypoint_tolerance_m == null ? '—' : `${formatNumber(route.validation.waypoint_tolerance_m, 3)} m (격자 스냅 기준)`}</dd></dl>
+                    {route.timings && <p>컴파일 {formatNumber(route.timings.compile_ms, 1)} ms · 탐색 {formatNumber(route.timings.search_ms, 1)} ms · 검증 {formatNumber(route.timings.validate_ms, 1)} ms. 저장·통신 시간은 제외합니다.</p>}
+                    {!!route.legacy_approval_rule_ids?.length && <p>과거 승인 형식: {route.legacy_approval_rule_ids.join(', ')}. 규칙 패널에서 검토자 이름으로 다시 승인하면 현재 내용에 승인이 연결됩니다.</p>}
+                  </details>
                 </>
               )}
             </section>

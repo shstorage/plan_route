@@ -1,5 +1,6 @@
 """Versioned, atomic storage for validated EngineeringProject documents."""
 
+import hashlib
 import json
 import os
 import re
@@ -46,14 +47,26 @@ def load_project(project_id: str) -> StoredProject:
     """Load and revalidate one project, including its content hash."""
     path = _project_path(project_id)
     try:
-        saved = StoredProject.model_validate_json(path.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        saved = StoredProject.model_validate(raw)
     except FileNotFoundError as error:
         raise ProjectNotFoundError(f"project {project_id} was not found") from error
+    normalized_hash = project_fingerprint(saved.project)
+    if saved.document_hash != normalized_hash:
+        # Verify the old exact stored payload before supplying new optional defaults.
+        old_hash = hashlib.sha256(
+            json.dumps(raw["project"], sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        if saved.document_hash != old_hash:
+            raise ValueError(f"stored project {project_id} failed integrity validation")
+        saved = saved.model_copy(update={"document_hash": normalized_hash})
     if (
         saved.project_id != project_id
         or saved.project.project_id != project_id
         or saved.schema_version != saved.project.schema_version
-        or saved.document_hash != project_fingerprint(saved.project)
+        or saved.document_hash != normalized_hash
     ):
         raise ValueError(f"stored project {project_id} failed integrity validation")
     return saved

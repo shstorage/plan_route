@@ -131,7 +131,9 @@ def compile_constraints(project: EngineeringProject, pipe_id: str) -> Compilatio
         key=lambda rule: rule.id,
     )
     unapproved = [
-        rule.id for rule in relevant if rule.status is not ConstraintStatus.APPROVED
+        rule.id
+        for rule in relevant
+        if rule.status is not ConstraintStatus.APPROVED or not rule.approval_is_current
     ]
     if unapproved:
         return _failure(
@@ -139,7 +141,8 @@ def compile_constraints(project: EngineeringProject, pipe_id: str) -> Compilatio
             project,
             pipe_id,
             fingerprint,
-            f"unapproved rules for pipe {pipe_id}: {', '.join(unapproved)}",
+            f"unapproved or stale approvals for pipe {pipe_id}: "
+            f"{', '.join(unapproved)}",
         )
     grid = voxelize_project(project, pipe_id)
     shapes: dict[str, AABB] = {

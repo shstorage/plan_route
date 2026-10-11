@@ -15,6 +15,7 @@ type Props = {
   /** Set by the inspector's "add rule for this object"; a new nonce opens the form with that target. */
   newRuleRequest: { targetId: string; nonce: number } | null
   onCommit: (project: EngineeringProject) => void
+  onApproveRule: (project: EngineeringProject, ruleId: string, reviewer: string) => void
 }
 
 const AUTO_SOURCE_KEY = 'plan_route.autoRuleSource'
@@ -91,17 +92,23 @@ function RuleTypeFields({ type, distanceText, onType, onDistance }: {
   </div>
 }
 
-function RuleEditor({ project, rule, busy, onCommit, onDeleted }: {
+function RuleEditor({ project, rule, busy, onCommit, onDeleted, onApproveRule }: {
   project: EngineeringProject; rule: Constraint; busy: boolean
   onCommit: (project: EngineeringProject) => void; onDeleted: () => void
+  onApproveRule: Props['onApproveRule']
 }) {
   const [edit, setEdit] = useState<RuleEdit>(() => editFor(rule))
   const [error, setError] = useState('')
+  const [reviewer, setReviewer] = useState('')
 
   function apply(event: FormEvent) {
     event.preventDefault()
     try {
-      onCommit(updateRule(project, rule.id, edit))
+      const changed = updateRule(project, rule.id, edit)
+      if (edit.status === 'approved') {
+        if (!reviewer.trim()) throw new Error('현재 규칙을 승인할 검토자 이름을 입력해 주세요.')
+        onApproveRule(changed, rule.id, reviewer.trim())
+      } else onCommit(changed)
       setError('')
     } catch (failure) {
       // Shown next to the button: the canvas error banner is usually scrolled out of view here.
@@ -117,9 +124,15 @@ function RuleEditor({ project, rule, busy, onCommit, onDeleted }: {
     <label className="rule-status">승인 상태<select value={edit.status} onChange={(event) => setEdit({ ...edit, status: event.target.value as Constraint['status'] })}>
       {(Object.keys(RULE_STATUS_TEXT) as Constraint['status'][]).map((status) => <option key={status} value={status}>{RULE_STATUS_TEXT[status]} ({status})</option>)}
     </select></label>
+    {edit.status === 'approved' && <label>승인 검토자 이름
+      <input value={reviewer} onChange={(event) => setReviewer(event.target.value)} maxLength={100} required />
+      <small>현재 개정의 내용을 확인하고 승인합니다. 수정된 규칙에는 이전 승인이 재사용되지 않습니다.</small>
+    </label>}
+    <p className="rule-source">규칙 개정 {rule.definition_revision ?? 1} · {rule.approved_content_sha256 ? '내용에 연결된 승인' : '내용 연결 승인 없음'}
+      {rule.approved_by && ` · ${rule.approved_by} · ${rule.approved_at ?? ''}`}</p>
     <p className="rule-source">출처: {rule.source.document_id} · 개정 {rule.source.document_revision} · {rule.source.clause_id} ({rule.source.source_type})<br />근거: {rule.source.evidence_text}</p>
     <div className="rule-actions">
-      <button type="submit" className="button-secondary" disabled={busy}>규칙 적용</button>
+      <button type="submit" className="button-secondary" disabled={busy}>{edit.status === 'approved' ? '현재 내용 승인·적용' : '규칙 적용'}</button>
       <button type="button" className="button-danger" disabled={busy} onClick={() => {
         try { onCommit(deleteRule(project, rule.id)); onDeleted() }
         catch (failure) { setError(failure instanceof Error ? failure.message : '규칙을 삭제하지 못했습니다.') }
@@ -185,7 +198,7 @@ function NewRuleForm({ project, initial, busy, onCreated, onCancel, onCommit }: 
 }
 
 export function RulesPanel({
-  project, selectedPipeId, busy, focusRuleId, onFocusRule, newRuleRequest, onCommit,
+  project, selectedPipeId, busy, focusRuleId, onFocusRule, newRuleRequest, onCommit, onApproveRule,
 }: Props) {
   const [creating, setCreating] = useState<NewRule | null>(null)
   const [creatingKey, setCreatingKey] = useState(0)
@@ -250,7 +263,7 @@ export function RulesPanel({
               <span className="rule-sentence">{describeRule(rule)}</span>
               <span className="rule-meta">{rule.id} · {RULE_STATUS_TEXT[rule.status]}</span>
             </button>
-            {open && <RuleEditor key={JSON.stringify(rule)} project={project} rule={rule} busy={busy} onCommit={onCommit} onDeleted={() => onFocusRule('')} />}
+            {open && <RuleEditor key={JSON.stringify(rule)} project={project} rule={rule} busy={busy} onCommit={onCommit} onApproveRule={onApproveRule} onDeleted={() => onFocusRule('')} />}
           </li>
         })}
         {!rules.length && <li className="rule-empty">규칙이 없습니다. ‘+ 규칙 추가’로 만들 수 있습니다.</li>}
