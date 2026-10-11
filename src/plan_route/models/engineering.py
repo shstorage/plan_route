@@ -70,6 +70,15 @@ class Pipe(ContractModel):
     to_port_id: Identifier
     outer_diameter_m: float = Field(gt=0, allow_inf_nan=False)
     insulation_thickness_m: float = Field(ge=0, allow_inf_nan=False)
+    clearance_margin_m: float = Field(
+        default=0.0,
+        ge=0,
+        allow_inf_nan=False,
+        description=(
+            "User-chosen extra envelope thickness added outside the insulation "
+            "for every geometric check; a study assumption, not a code value."
+        ),
+    )
     train_id: Identifier | None = None
 
     @model_validator(mode="after")

@@ -52,16 +52,31 @@ class ProjectNotFoundResponse(BaseModel):
     details: list[ValidationIssue] = Field(default_factory=list)
 
 
-def load_demo_project() -> EngineeringProject:
-    resource = files("plan_route").joinpath("fixtures/demo_project.json")
+def _load_fixture(name: str) -> EngineeringProject:
+    resource = files("plan_route").joinpath(f"fixtures/{name}")
     return EngineeringProject.model_validate(
         json.loads(resource.read_text(encoding="utf-8"))
     )
 
 
+def load_demo_project() -> EngineeringProject:
+    """Small 12 x 10 x 4 m test case used by unit tests."""
+    return _load_fixture("demo_project.json")
+
+
+def load_plant_starter_project() -> EngineeringProject:
+    """Synthetic 60 x 40 x 12 m two-floor building used as the UI starting point."""
+    return _load_fixture("plant_starter_project.json")
+
+
 @router.get("/demo", response_model=EngineeringProject)
 def get_demo_project() -> EngineeringProject:
     return load_demo_project()
+
+
+@router.get("/starter", response_model=EngineeringProject)
+def get_plant_starter_project() -> EngineeringProject:
+    return load_plant_starter_project()
 
 
 @router.post(

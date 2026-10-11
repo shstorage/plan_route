@@ -1,4 +1,4 @@
-import type { Aabb, Constraint, EngineeringProject, Point3, Port } from '../api/client'
+import type { Aabb, Constraint, EngineeringProject, Pipe, Point3, Port } from '../api/client'
 import { snapMeters } from './coordinates.ts'
 
 export type BoxKind = 'obstacle' | 'zone'
@@ -152,6 +152,154 @@ export function createBox(
   return { project: { ...project, zones: [...project.zones, { id, zone_type: 'restricted', shape }] }, selection: { kind, id } }
 }
 
+// Click (or a drag thinner than one snap step) falls back to createBox's default square.
+export function drawBox(
+  project: EngineeringProject, kind: BoxKind, start: Point3, end: Point3, floor: Floor, snapStep: number | null,
+): { project: EngineeringProject; selection: Selection } {
+  const origin = project.coordinate_frame.origin_m
+  const snapX = (value: number) => snapStep ? snapMeters(value, snapStep, origin[0]) : value
+  const snapY = (value: number) => snapStep ? snapMeters(value, snapStep, origin[1]) : value
+  const minX = snapX(Math.min(start[0], end[0]))
+  const maxX = snapX(Math.max(start[0], end[0]))
+  const minY = snapY(Math.min(start[1], end[1]))
+  const maxY = snapY(Math.max(start[1], end[1]))
+  if (maxX - minX < 0.1 - 1e-9 || maxY - minY < 0.1 - 1e-9) {
+    return createBox(project, kind, [start[0], start[1], start[2]], floor, snapStep)
+  }
+  const shape: Aabb = { type: 'aabb', min_m: [minX, minY, floor.z_min_m], max_m: [maxX, maxY, floor.z_max_m] }
+  checkBox(project, shape)
+  if (kind === 'obstacle') {
+    const id = nextId(project, 'WALL')
+    return { project: { ...project, obstacles: [...project.obstacles, { id, kind: 'wall', shape }] }, selection: { kind, id } }
+  }
+  const id = nextId(project, 'ZONE')
+  return { project: { ...project, zones: [...project.zones, { id, zone_type: 'restricted', shape }] }, selection: { kind, id } }
+}
+
+// New ports reuse the height of an existing port on the floor, else 1 m above the slab (capped at mid-height).
+export function defaultPortHeight(project: EngineeringProject, floor: Floor): number {
+  const existing = project.equipment.flatMap((item) => item.ports)
+    .find((port) => port.position_m[2] >= floor.z_min_m && port.position_m[2] <= floor.z_max_m)
+  if (existing) return existing.position_m[2]
+  return floor.z_min_m + Math.min(1, (floor.z_max_m - floor.z_min_m) / 2)
+}
+
+export function deleteObject(project: EngineeringProject, selection: Selection): EngineeringProject {
+  if (selection.kind === 'port') {
+    const owner = project.equipment.find((item) => item.ports.some((port) => port.id === selection.id))
+    if (!owner) throw new Error(`Port ${selection.id}가 없습니다.`)
+    const pipes = project.pipes.filter((pipe) => pipe.from_port_id === selection.id || pipe.to_port_id === selection.id)
+    if (pipes.length) throw new Error(`배관 ${pipes.map((pipe) => pipe.id).join(', ')}이(가) 연결된 Port는 삭제할 수 없습니다. 먼저 다른 Port로 연결을 바꿔 주세요.`)
+    if (owner.ports.length === 1) throw new Error(`장비 ${owner.id}의 마지막 Port는 삭제할 수 없습니다.`)
+    return {
+      ...project,
+      equipment: project.equipment.map((item) => item.id !== owner.id ? item : { ...item, ports: item.ports.filter((port) => port.id !== selection.id) }),
+    }
+  }
+  boxFor(project, selection.kind, selection.id)
+  const rules = project.constraints.filter((rule) => rule.scope.target_ids.includes(selection.id))
+  if (rules.length) throw new Error(`규칙 ${rules.map((rule) => rule.id).join(', ')}이(가) 대상으로 쓰는 객체는 삭제할 수 없습니다. 먼저 규칙 대상을 바꿔 주세요.`)
+  return selection.kind === 'obstacle'
+    ? { ...project, obstacles: project.obstacles.filter((item) => item.id !== selection.id) }
+    : { ...project, zones: project.zones.filter((item) => item.id !== selection.id) }
+}
+
+export type FloorEdit = { id: string; zMinText: string; zMaxText: string }
+export type DomainEdit = {
+  minText: [string, string, string]
+  maxText: [string, string, string]
+  floors: FloorEdit[]
+  gridText: string
+}
+
+/** Above this many cells the browser asks before a slow solve; above MAX it refuses. */
+export const CELL_WARNING = 400_000
+export const CELL_LIMIT = 3_000_000
+
+function parseMetres(text: string, label: string): number {
+  const value = Number(text)
+  if (!text.trim() || !Number.isFinite(value)) throw new Error(`${label}에 유한한 숫자(m)를 입력해 주세요.`)
+  return value
+}
+
+/** Same rounding as the backend GridSpec: a clipped final cell still counts. */
+export function gridCellCount(min: Point3, max: Point3, resolution: number): number {
+  return [0, 1, 2].reduce((total, axis) => {
+    const quotient = (max[axis] - min[axis]) / resolution
+    const nearest = Math.round(quotient)
+    return total * (nearest >= 1 && Math.abs(quotient - nearest) <= 1e-9 ? nearest : Math.ceil(quotient))
+  }, 1)
+}
+
+export function updateDomain(project: EngineeringProject, edit: DomainEdit): EngineeringProject {
+  const axes = ['X', 'Y', 'Z']
+  const min = edit.minText.map((text, axis) => parseMetres(text, `도메인 ${axes[axis]} 최소`)) as Point3
+  const max = edit.maxText.map((text, axis) => parseMetres(text, `도메인 ${axes[axis]} 최대`)) as Point3
+  for (let axis = 0; axis < 3; axis++) {
+    if (max[axis] - min[axis] < 0.1 - 1e-9) throw new Error(`도메인 ${axes[axis]} 크기는 최소 0.1 m여야 합니다.`)
+  }
+  const grid = parseMetres(edit.gridText, '격자 간격')
+  if (grid < 0.05) throw new Error('격자 간격은 0.05 m 이상이어야 합니다.')
+  const cells = gridCellCount(min, max, grid)
+  if (cells > CELL_LIMIT) {
+    throw new Error(`격자 칸이 ${cells.toLocaleString('ko-KR')}개로 너무 많습니다(한도 ${CELL_LIMIT.toLocaleString('ko-KR')}). 격자를 키우거나 도메인을 줄여 주세요.`)
+  }
+  if (project.building.floors.length !== edit.floors.length || edit.floors.some((floor, index) => floor.id !== project.building.floors[index].id)) {
+    throw new Error('층 목록이 프로젝트와 일치하지 않습니다.')
+  }
+  const floors = edit.floors.map((floor, index) => {
+    const zMin = parseMetres(floor.zMinText, `${floor.id} 바닥 z`)
+    const zMax = parseMetres(floor.zMaxText, `${floor.id} 천장 z`)
+    if (zMin >= zMax) throw new Error(`${floor.id}의 바닥 z는 천장 z보다 낮아야 합니다.`)
+    if (zMin < min[2] - 1e-9 || zMax > max[2] + 1e-9) throw new Error(`${floor.id}가 도메인 Z 범위(${min[2]}–${max[2]} m) 밖에 있습니다.`)
+    return { ...project.building.floors[index], z_min_m: zMin, z_max_m: zMax }
+  })
+  const inside = (point: Point3) => point.every((value, axis) => value >= min[axis] - 1e-9 && value <= max[axis] + 1e-9)
+  const outside = [
+    ...[...project.obstacles, ...project.zones].filter((item) => !inside(item.shape.min_m) || !inside(item.shape.max_m)).map((item) => item.id),
+    ...project.equipment.flatMap((item) => item.ports).filter((port) => !inside(port.position_m)).map((port) => port.id),
+  ]
+  if (outside.length) throw new Error(`새 도메인 밖에 남는 객체가 있습니다: ${outside.join(', ')}. 먼저 옮기거나 삭제해 주세요.`)
+  return {
+    ...project,
+    building: { ...project.building, bounds_m: { type: 'aabb', min_m: min, max_m: max }, floors },
+    routing_config: { ...project.routing_config, grid_resolution_m: grid },
+  }
+}
+
+/** UI shows pipe sizes in mm; the domain JSON always stores metres. */
+export function metresToMillimetres(value: number): number {
+  return Number((value * 1000).toFixed(6))
+}
+
+/** Returns a metre string, or the original text so updatePipe reports it as invalid. */
+export function millimetresToMetres(text: string): string {
+  const value = Number(text)
+  return text.trim() && Number.isFinite(value) ? String(Number((value / 1000).toFixed(9))) : text
+}
+
+export type PipeEdit = { outerDiameterText: string; insulationText: string; marginText: string }
+
+/** Diameter of the envelope the router keeps clear: OD + 2 x (insulation + margin). */
+export function pipeEnvelopeDiameter(pipe: Pick<Pipe, 'outer_diameter_m' | 'insulation_thickness_m' | 'clearance_margin_m'>): number {
+  return pipe.outer_diameter_m + 2 * (pipe.insulation_thickness_m + (pipe.clearance_margin_m ?? 0))
+}
+
+export function updatePipe(project: EngineeringProject, pipeId: string, edit: PipeEdit): EngineeringProject {
+  if (!project.pipes.some((pipe) => pipe.id === pipeId)) throw new Error(`배관 ${pipeId}가 없습니다.`)
+  const outer = parseMetres(edit.outerDiameterText, '외경')
+  const insulation = parseMetres(edit.insulationText, '보온재 두께')
+  const margin = parseMetres(edit.marginText, '추가 마진')
+  if (outer <= 0) throw new Error('외경은 0보다 커야 합니다.')
+  if (insulation < 0 || margin < 0) throw new Error('보온재 두께와 추가 마진은 0 이상이어야 합니다.')
+  return {
+    ...project,
+    pipes: project.pipes.map((pipe) => pipe.id !== pipeId ? pipe : {
+      ...pipe, outer_diameter_m: outer, insulation_thickness_m: insulation, clearance_margin_m: margin,
+    }),
+  }
+}
+
 export function createPort(
   project: EngineeringProject, equipmentId: string, at: Point3, floor: Floor, snapStep: number | null,
 ): { project: EngineeringProject; selection: Selection } {
@@ -159,7 +307,7 @@ export function createPort(
   const position: Point3 = [
     snapStep ? snapMeters(at[0], snapStep, origin[0]) : at[0],
     snapStep ? snapMeters(at[1], snapStep, origin[1]) : at[1],
-    (floor.z_min_m + floor.z_max_m) / 2,
+    defaultPortHeight(project, floor),
   ]
   checkPoint(project, position)
   if (!project.equipment.some((item) => item.id === equipmentId)) throw new Error('Port 소유 장비를 선택해 주세요.')

@@ -64,9 +64,20 @@ export interface EngineeringProject {
   obstacles: Obstacle[]
   zones: Zone[]
   equipment: Equipment[]
-  pipes: Array<{ id: string; from_port_id: string; to_port_id: string }>
+  pipes: Pipe[]
   constraints: Constraint[]
   routing_config: { grid_resolution_m: number }
+}
+
+export interface Pipe {
+  id: string
+  from_port_id: string
+  to_port_id: string
+  outer_diameter_m: number
+  insulation_thickness_m: number
+  /** Optional in stored JSON; the backend treats a missing value as 0. */
+  clearance_margin_m?: number
+  train_id?: string | null
 }
 
 export interface HealthResponse {
@@ -208,8 +219,19 @@ export async function getHealth(signal: AbortSignal): Promise<HealthResponse> {
   return { status: 'ok' }
 }
 
+export type ExampleProject = 'starter' | 'demo'
+
+export const exampleLabels: Record<ExampleProject, string> = {
+  starter: '합성 플랜트 건물 60×40×12 m',
+  demo: '소형 테스트 데모 12×10×4 m',
+}
+
+export async function getExampleProject(name: ExampleProject, signal?: AbortSignal): Promise<EngineeringProject> {
+  return requireProject(await requestJson<unknown>(`/api/projects/${name}`, { signal }))
+}
+
 export async function getDemoProject(signal?: AbortSignal): Promise<EngineeringProject> {
-  return requireProject(await requestJson<unknown>('/api/projects/demo', { signal }))
+  return getExampleProject('demo', signal)
 }
 
 export async function validateProject(project: unknown): Promise<ProjectValidationResponse> {

@@ -363,6 +363,13 @@
     "Pipe": {
       "additionalProperties": false,
       "properties": {
+        "clearance_margin_m": {
+          "default": 0.0,
+          "description": "User-chosen extra envelope thickness added outside the insulation for every geometric check; a study assumption, not a code value.",
+          "minimum": 0,
+          "title": "Clearance Margin M",
+          "type": "number"
+        },
         "from_port_id": {
           "minLength": 1,
           "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",

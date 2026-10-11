@@ -9,8 +9,10 @@ type Props = {
   project: EngineeringProject
   selection: Selection | null
   selectedPipeId: string
+  busy: boolean
   onCommit: (project: EngineeringProject) => void
   onError: (message: string) => void
+  onDelete: () => void
 }
 
 type GeometryDraft = {
@@ -60,7 +62,7 @@ function draftForRule(rule: Constraint | undefined): RuleEdit {
   }
 }
 
-export function EditorInspector({ project, selection, selectedPipeId, onCommit, onError }: Props) {
+export function EditorInspector({ project, selection, selectedPipeId, busy, onCommit, onError, onDelete }: Props) {
   const [geometry, setGeometry] = useState<GeometryDraft>(() => draftFor(project, selection))
   const [ruleId, setRuleId] = useState(() =>
     project.constraints.findLast((rule) => selection && rule.scope.target_ids.includes(selection.id))?.id
@@ -90,14 +92,20 @@ export function EditorInspector({ project, selection, selectedPipeId, onCommit, 
           max_m: [numeric(geometry.maxX), numeric(geometry.maxY), numeric(geometry.maxZ)],
         }))
       }
-    } catch (error) { onError(error instanceof Error ? error.message : '좌표를 변경하지 못했습니다.') }
+    } catch (error) {
+      onError(error instanceof Error ? error.message : '좌표를 변경하지 못했습니다.')
+      setGeometry(draftFor(project, selection))
+    }
   }
 
   function applyRule(event: FormEvent) {
     event.preventDefault()
     if (!rule) return
     try { onCommit(updateRule(project, rule.id, ruleEdit)) }
-    catch (error) { onError(error instanceof Error ? error.message : '규칙을 변경하지 못했습니다.') }
+    catch (error) {
+      onError(error instanceof Error ? error.message : '규칙을 변경하지 못했습니다.')
+      setRuleEdit(draftForRule(rule))
+    }
   }
 
   function addRule(event: FormEvent) {
@@ -120,7 +128,7 @@ export function EditorInspector({ project, selection, selectedPipeId, onCommit, 
   return (
     <aside className="editor-inspector" aria-label="도면 속성">
       <div className="inspector-heading"><span>속성</span><strong>{selection?.id ?? '객체 선택'}</strong></div>
-      {!selection ? <p className="inspector-empty">도면에서 벽체, Zone 또는 Port를 선택하면 좌표와 속성을 변경할 수 있습니다.</p> : (
+      {!selection ? <p className="inspector-empty">도면에서 벽체, Zone 또는 Port를 선택하면 좌표와 속성을 변경할 수 있습니다. 도메인 크기·격자·배관 단면은 도면 위 설정에서 바꿉니다.</p> : (
         <form onSubmit={applyGeometry} className="inspector-form">
           <div className="inspector-meta"><span>종류</span><strong>{selection.kind === 'obstacle' ? '장애물' : selection.kind === 'zone' ? '제약 Zone' : 'Port'}</strong></div>
           {owner && <div className="inspector-meta"><span>소유 장비</span><strong>{owner}</strong></div>}
@@ -141,7 +149,10 @@ export function EditorInspector({ project, selection, selectedPipeId, onCommit, 
               ] as const).map(([key, label]) => <label key={key}>{label} (m)<input type="number" step="any" value={geometry[key]} onChange={(event) => setGeometry({ ...geometry, [key]: event.target.value })} /></label>)}
             </div>
           )}
-          <button type="submit" className="button-secondary">좌표 적용</button>
+          <div className="inspector-actions">
+            <button type="submit" className="button-secondary" disabled={busy}>좌표 적용</button>
+            <button type="button" className="button-danger" disabled={busy} onClick={onDelete}>삭제</button>
+          </div>
         </form>
       )}
       {selection?.kind === 'port' && selectedPipeId && (

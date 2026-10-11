@@ -3,8 +3,9 @@ import Konva from 'konva'
 import { Stage, Layer, Rect, Line, Circle, Text } from 'react-konva'
 import type { EngineeringProject, Point3, RouteSolveReport } from '../api/client'
 import { fitView, planToWorld, screenToWorld, snapMeters, worldBoxToPlan, worldToPlan, zoomAt, type PlanView } from './coordinates.ts'
-import { createBox, createPort, moveBox, resizeBox, routeSegmentsOnFloor, updatePort, type BoxKind, type Corner, type Selection } from './model.ts'
+import { createPort, deleteObject, drawBox, moveBox, resizeBox, routeSegmentsOnFloor, updatePort, type BoxKind, type Corner, type Selection } from './model.ts'
 import { EditorInspector } from './EditorInspector'
+import { DomainSettings, PipeSettings } from './DomainPanel'
 import './PlanEditor.css'
 
 type Mode = 'select' | 'pan' | 'add-obstacle' | 'add-zone' | 'add-port'
@@ -19,14 +20,16 @@ type Props = {
   onUndo: () => void
   onRedo: () => void
   onCommit: (project: EngineeringProject) => void
-  onError: (message: string) => void
+  onSelectPipe: (pipeId: string) => void
 }
+
+type Draft = { kind: BoxKind; start: Point3; end: Point3 }
 
 const HEIGHT = 540
 const corners: Corner[] = ['nw', 'ne', 'sw', 'se']
 
 export function PlanEditor({
-  project, route, selectedPipeId, busy, canUndo, canRedo, onUndo, onRedo, onCommit, onError,
+  project, route, selectedPipeId, busy, canUndo, canRedo, onUndo, onRedo, onCommit, onSelectPipe,
 }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
@@ -38,6 +41,9 @@ export function PlanEditor({
   const [equipmentId, setEquipmentId] = useState(project.equipment[0]?.id ?? '')
   const [selection, setSelection] = useState<Selection | null>(null)
   const [hovered, setHovered] = useState<Point3 | null>(null)
+  const [draft, setDraft] = useState<Draft | null>(null)
+  const [editorError, setEditorError] = useState<string | null>(null)
+  const [openCards, setOpenCards] = useState({ domain: false, pipe: false })
   const bounds = project.building.bounds_m
   const floor = project.building.floors.find((item) => item.id === floorId) ?? project.building.floors[0]
   const chosenEquipmentId = project.equipment.some((item) => item.id === equipmentId)
@@ -68,14 +74,65 @@ export function PlanEditor({
   const invalidSegments = new Set(route?.validation?.violations.map((item) => item.segment_index) ?? [])
   const anyPendingRule = project.constraints.some((item) => item.scope.pipe_ids.includes(selectedPipeId) && item.status !== 'approved')
 
+  function commit(next: EngineeringProject) {
+    setEditorError(null)
+    onCommit(next)
+  }
+
+  function onError(message: string) {
+    setEditorError(message)
+  }
+
   function tryCommit(change: () => EngineeringProject): boolean {
     try {
-      onCommit(change())
+      commit(change())
       return true
     } catch (error) {
       onError(error instanceof Error ? error.message : '객체를 변경하지 못했습니다.')
       return false
     }
+  }
+
+  function deleteSelected() {
+    if (!selection || busy) return
+    if (tryCommit(() => deleteObject(project, selection))) setSelection(null)
+  }
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return
+      const target = event.target as HTMLElement | null
+      if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return
+      if (!selection) return
+      event.preventDefault()
+      deleteSelected()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  })
+
+  function pointerWorld(): Point3 | null {
+    const pointer = stageRef.current?.getPointerPosition()
+    if (!pointer || !floor) return null
+    return screenToWorld(pointer, (floor.z_min_m + floor.z_max_m) / 2, bounds, view)
+  }
+
+  function startDraft() {
+    if (busy || (mode !== 'add-obstacle' && mode !== 'add-zone')) return
+    const at = pointerWorld()
+    if (at) setDraft({ kind: mode === 'add-obstacle' ? 'obstacle' : 'zone', start: at, end: at })
+  }
+
+  function finishDraft() {
+    if (!draft || !floor) return
+    const end = pointerWorld() ?? draft.end
+    setDraft(null)
+    try {
+      const created = drawBox(project, draft.kind, draft.start, end, floor, snapEnabled ? snapStep : null)
+      commit(created.project)
+      setSelection(created.selection)
+      setMode('select')
+    } catch (error) { onError(error instanceof Error ? error.message : '객체를 만들지 못했습니다.') }
   }
 
   function zoom(factor: number, pointer = { x: width / 2, y: HEIGHT / 2 }) {
@@ -86,15 +143,12 @@ export function PlanEditor({
   function clickSurface() {
     if (busy || !floor) return
     if (mode === 'select') { setSelection(null); return }
-    if (mode === 'pan') return
-    const pointer = stageRef.current?.getPointerPosition()
-    if (!pointer) return
-    const at = screenToWorld(pointer, (floor.z_min_m + floor.z_max_m) / 2, bounds, view)
+    if (mode !== 'add-port') return
+    const at = pointerWorld()
+    if (!at) return
     try {
-      const created = mode === 'add-port'
-        ? createPort(project, chosenEquipmentId, at, floor, snapEnabled ? snapStep : null)
-        : createBox(project, mode === 'add-obstacle' ? 'obstacle' : 'zone', at, floor, snapEnabled ? snapStep : null)
-      onCommit(created.project)
+      const created = createPort(project, chosenEquipmentId, at, floor, snapEnabled ? snapStep : null)
+      commit(created.project)
       setSelection(created.selection)
       setMode('select')
     } catch (error) { onError(error instanceof Error ? error.message : '객체를 만들지 못했습니다.') }
@@ -107,8 +161,12 @@ export function PlanEditor({
     const rules = project.constraints.filter((rule) => rule.scope.pipe_ids.includes(selectedPipeId) && rule.scope.target_ids.includes(item.id))
     const restricted = kind === 'zone' && rules.some((rule) => rule.type === 'KEEP_OUT' && rule.status === 'approved')
     const pending = kind === 'zone' && rules.some((rule) => rule.status !== 'approved')
-    const fill = kind === 'obstacle' ? '#7991a1' : restricted ? '#f4ad99a3' : '#f8d8929c'
-    const stroke = selected ? '#0a8fb2' : kind === 'obstacle' ? '#52697b' : restricted ? '#c2614b' : '#c08b3f'
+    // Slabs cover a whole storey; draw them as outlines so the plan beneath stays visible
+    // and clicks inside reach the objects (with fill disabled Konva hit-tests only the stroke).
+    const slab = kind === 'obstacle' && 'kind' in item && item.kind === 'slab'
+    const fill = slab ? undefined : kind === 'obstacle' ? '#7991a1' : restricted ? '#f4ad99a3' : '#f8d8929c'
+    const stroke = selected ? '#0a8fb2' : slab ? '#8aa0ae' : kind === 'obstacle' ? '#52697b' : restricted ? '#c2614b' : '#c08b3f'
+    const labelInside = rect.width * view.scale > 70 && rect.height * view.scale > 18
     const xMin = rect.x
     const xMax = rect.x + rect.width
     const yMin = rect.y
@@ -117,7 +175,9 @@ export function PlanEditor({
       <Rect
         x={rect.x} y={rect.y} width={rect.width} height={rect.height}
         fill={fill} stroke={stroke} strokeWidth={(selected ? 2.5 : 1.6) / view.scale}
-        dash={pending ? [7 / view.scale, 4 / view.scale] : undefined}
+        dash={pending || slab ? [7 / view.scale, 4 / view.scale] : undefined}
+        fillEnabled={!slab}
+        listening={mode === 'select'}
         draggable={!busy && mode === 'select'}
         onClick={(event) => { event.cancelBubble = true; setSelection({ kind, id: item.id }) }}
         onTap={(event) => { event.cancelBubble = true; setSelection({ kind, id: item.id }) }}
@@ -127,8 +187,9 @@ export function PlanEditor({
           node.position({ x: rect.x, y: rect.y })
         }}
       />
-      <Text x={rect.x + 5 / view.scale} y={rect.y + 5 / view.scale} text={item.id}
-        fontSize={11 / view.scale} fill={kind === 'obstacle' ? '#fff' : '#794b2e'} listening={false} />
+      <Text x={labelInside ? rect.x + 5 / view.scale : xMax + 3 / view.scale} y={labelInside ? rect.y + 5 / view.scale : yMin}
+        text={slab ? `${item.id} (바닥판)` : item.id}
+        fontSize={11 / view.scale} fill={slab ? '#6c8493' : kind === 'obstacle' && labelInside ? '#fff' : kind === 'obstacle' ? '#3b5566' : '#794b2e'} listening={false} />
       {selected && mode === 'select' && corners.map((corner) => {
         const x = corner.includes('w') ? xMin : xMax
         const y = corner.includes('n') ? yMin : yMax
@@ -165,10 +226,21 @@ export function PlanEditor({
           <label className="snap-label"><input type="checkbox" checked={snapEnabled} onChange={(event) => setSnapEnabled(event.target.checked)} /> 스냅 {snapStep} m</label>
         </div>
       </div>
+      <div className="plan-setup">
+        <DomainSettings
+          project={project} busy={busy} onCommit={commit} onError={onError}
+          open={openCards.domain} onToggle={(domain) => setOpenCards((cards) => ({ ...cards, domain }))}
+        />
+        <PipeSettings
+          project={project} pipeId={selectedPipeId} onSelectPipe={onSelectPipe} busy={busy} onCommit={commit} onError={onError}
+          open={openCards.pipe} onToggle={(pipe) => setOpenCards((cards) => ({ ...cards, pipe }))}
+        />
+      </div>
       <div className="plan-body">
         <div className="plan-canvas-column">
           {anyPendingRule && <div className="plan-warning" role="status">미승인 규칙이 있습니다. 해당 배관은 승인 전 경로 실행이 거부됩니다.</div>}
           <div className={`canvas-viewport mode-${mode}`} ref={viewportRef}>
+            {editorError && <div className="plan-error" role="alert"><span><strong>반영되지 않음</strong> {editorError}</span><button type="button" aria-label="오류 닫기" onClick={() => setEditorError(null)}>×</button></div>}
             <Stage ref={stageRef} width={width} height={HEIGHT} x={view.panX} y={view.panY} scaleX={view.scale} scaleY={view.scale}
               draggable={!busy && mode === 'pan'}
               onDragEnd={(event) => {
@@ -179,11 +251,14 @@ export function PlanEditor({
                 const pointer = stageRef.current?.getPointerPosition()
                 if (pointer) zoom(event.evt.deltaY < 0 ? 1.12 : 1 / 1.12, pointer)
               }}
+              onMouseDown={startDraft}
               onMouseMove={() => {
-                const pointer = stageRef.current?.getPointerPosition()
-                if (pointer && floor) setHovered(screenToWorld(pointer, (floor.z_min_m + floor.z_max_m) / 2, bounds, view))
+                const at = pointerWorld()
+                setHovered(at)
+                if (at && draft) setDraft({ ...draft, end: at })
               }}
-              onMouseLeave={() => setHovered(null)}
+              onMouseUp={finishDraft}
+              onMouseLeave={() => { setHovered(null); setDraft(null) }}
               onClick={(event) => { if (event.target === stageRef.current || event.target.name() === 'surface') clickSurface() }}
               onTap={(event) => { if (event.target === stageRef.current || event.target.name() === 'surface') clickSurface() }}
             >
@@ -191,8 +266,9 @@ export function PlanEditor({
                 <Rect name="surface" x={0} y={0} width={spanX} height={spanY} fill="#fbfdfe" stroke="#92a9b6" strokeWidth={2 / view.scale} />
                 {gridX.map((x) => <Line key={`x-${x}`} points={[x, 0, x, spanY]} stroke="#e1eaf0" strokeWidth={1 / view.scale} listening={false} />)}
                 {gridY.map((y) => <Line key={`y-${y}`} points={[0, y, spanX, y]} stroke="#e1eaf0" strokeWidth={1 / view.scale} listening={false} />)}
+                {project.obstacles.filter((item) => item.kind === 'slab').map((item) => renderBox('obstacle', item))}
                 {project.zones.map((item) => renderBox('zone', item))}
-                {project.obstacles.map((item) => renderBox('obstacle', item))}
+                {project.obstacles.filter((item) => item.kind !== 'slab').map((item) => renderBox('obstacle', item))}
                 {routeSegments.map((segment) => {
                   const start = worldToPlan(segment.from, bounds)
                   const end = worldToPlan(segment.to, bounds)
@@ -201,12 +277,20 @@ export function PlanEditor({
                     stroke={invalid ? '#df4047' : '#087fad'} strokeWidth={(invalid ? 5 : 3.5) / view.scale}
                     lineCap="round" lineJoin="round" listening={false} />
                 })}
+                {draft && (() => {
+                  const a = worldToPlan(draft.start, bounds)
+                  const b = worldToPlan(draft.end, bounds)
+                  return <Rect x={Math.min(a.x, b.x)} y={Math.min(a.y, b.y)} width={Math.abs(b.x - a.x)} height={Math.abs(b.y - a.y)}
+                    fill={draft.kind === 'obstacle' ? '#7991a166' : '#f8d89266'} stroke="#0a8fb2" strokeWidth={1.5 / view.scale}
+                    dash={[6 / view.scale, 4 / view.scale]} listening={false} />
+                })()}
                 {visiblePorts.map((port) => {
                   const point = worldToPlan(port.position_m, bounds)
                   const selected = selection?.kind === 'port' && selection.id === port.id
                   return <Fragment key={port.id}>
                     <Circle x={point.x} y={point.y} radius={(selected ? 8 : 6) / view.scale}
                       fill="#fff" stroke={selected ? '#087fad' : '#105c77'} strokeWidth={2.5 / view.scale}
+                      listening={mode === 'select'}
                       draggable={!busy && mode === 'select'}
                       onClick={(event) => { event.cancelBubble = true; setSelection({ kind: 'port', id: port.id }) }}
                       onTap={(event) => { event.cancelBubble = true; setSelection({ kind: 'port', id: port.id }) }}
@@ -231,12 +315,13 @@ export function PlanEditor({
             </Stage>
             <div className="canvas-controls"><button type="button" onClick={() => zoom(1.25)} aria-label="확대">+</button><button type="button" onClick={() => zoom(1 / 1.25)} aria-label="축소">−</button><button type="button" onClick={() => setView(fitView(bounds, width, HEIGHT))} aria-label="화면 맞춤">□</button></div>
           </div>
-          <div className="canvas-footer"><span>{mode === 'pan' ? '드래그하여 화면 이동 · 휠로 확대/축소' : mode.startsWith('add') ? '도면 내부를 클릭하면 객체가 생성됩니다.' : '객체 선택 · 드래그 이동 · 모서리 점으로 크기 변경'}</span><strong>{hovered ? `X ${hovered[0].toFixed(2)} · Y ${hovered[1].toFixed(2)} m` : '세계좌표 m'}</strong></div>
+          <div className="canvas-footer"><span>{mode === 'pan' ? '드래그하여 화면 이동 · 휠로 확대/축소' : mode === 'add-port' ? '도면을 클릭하면 Port가 생성됩니다.' : mode.startsWith('add') ? '드래그해서 직사각형을 그리세요 · 클릭만 하면 기본 크기로 생성' : '객체 선택 · 드래그 이동 · 모서리 점으로 크기 변경 · Delete 키로 삭제'}</span><strong>{hovered ? `X ${hovered[0].toFixed(2)} · Y ${hovered[1].toFixed(2)} m` : '세계좌표 m'}</strong></div>
           <div className="plan-legend"><span><i className="legend-wall" /> 장애물</span><span><i className="legend-zone" /> Zone</span><span><i className="legend-port" /> Port</span><span><i className="legend-route" /> 경로</span><span><i className="legend-invalid" /> 위반 구간</span></div>
         </div>
         <EditorInspector
           key={`${selection?.kind ?? 'none'}:${selection?.id ?? ''}:${selectedPipeId}:${JSON.stringify(selection?.kind === 'port' ? visiblePorts.find((port) => port.id === selection.id) : selection?.kind === 'obstacle' ? project.obstacles.find((item) => item.id === selection.id) : project.zones.find((item) => item.id === selection?.id))}:${JSON.stringify(project.constraints)}`}
-          project={project} selection={selection} selectedPipeId={selectedPipeId} onCommit={onCommit} onError={onError}
+          project={project} selection={selection} selectedPipeId={selectedPipeId} busy={busy}
+          onCommit={commit} onError={onError} onDelete={deleteSelected}
         />
       </div>
     </section>

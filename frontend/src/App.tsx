@@ -2,13 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   API_BASE_URL,
   ApiError,
-  getDemoProject,
+  exampleLabels,
+  getExampleProject,
   getHealth,
   loadProject,
   saveProject,
   solveRoute,
   validateProject,
   type EngineeringProject,
+  type ExampleProject,
   type RouteSolveReport,
   type ValidationIssue,
 } from './api/client'
@@ -106,7 +108,8 @@ function App() {
   const [editorProject, setEditorProject] = useState<EngineeringProject | null>(null)
   const [past, setPast] = useState<string[]>([])
   const [future, setFuture] = useState<string[]>([])
-  const [projectLabel, setProjectLabel] = useState('데모 불러오는 중')
+  const [projectLabel, setProjectLabel] = useState('예제 불러오는 중')
+  const [example, setExample] = useState<ExampleProject>('starter')
   const [selectedPipeId, setSelectedPipeId] = useState('')
   const [lookupId, setLookupId] = useState('')
   const [savedMeta, setSavedMeta] = useState<{ revision: number; updatedAt: string } | null>(null)
@@ -147,20 +150,20 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController()
-    getDemoProject(controller.signal)
+    getExampleProject('starter', controller.signal)
       .then((project) => {
         setProjectText(JSON.stringify(project, null, 2))
         setEditorProject(project)
-        setProjectLabel('합성 데모')
+        setProjectLabel(exampleLabels.starter)
         setSelectedPipeId(project.pipes[0]?.id ?? '')
         setLookupId(project.project_id)
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return
-        setProjectLabel('데모를 불러오지 못했습니다')
+        setProjectLabel('예제를 불러오지 못했습니다')
         setNotice({
           kind: 'error',
-          title: '데모 불러오기 실패',
+          title: '예제 불러오기 실패',
           message: error instanceof Error ? error.message : '서버에 연결할 수 없습니다.',
         })
       })
@@ -272,7 +275,7 @@ function App() {
 
         {editorProject ? (
           <PlanEditor
-            key={`${editorProject.project_id}:${editorProject.building.bounds_m.min_m.join(',')}:${editorProject.building.bounds_m.max_m.join(',')}`}
+            key={editorProject.project_id}
             project={editorProject}
             route={route?.pipe_id === selectedPipeId ? route : null}
             selectedPipeId={selectedPipeId}
@@ -282,9 +285,9 @@ function App() {
             onUndo={undoEditor}
             onRedo={redoEditor}
             onCommit={commitEditorProject}
-            onError={(message) => setNotice({ kind: 'error', title: '도면 편집 오류', message })}
+            onSelectPipe={(pipeId) => { setSelectedPipeId(pipeId); setRoute(null) }}
           />
-        ) : <section className="panel editor-placeholder"><p className="step">02 / PLAN EDITOR</p><h2>도면 준비 중</h2><p>데모를 불러오거나 수정한 JSON을 검증하면 층별 배치도가 나타납니다.</p></section>}
+        ) : <section className="panel editor-placeholder"><p className="step">02 / PLAN EDITOR</p><h2>도면 준비 중</h2><p>예제를 불러오거나 수정한 JSON을 검증하면 층별 배치도가 나타납니다.</p></section>}
 
         <section className="workspace" aria-label="프로젝트 작업대">
           <div className="left-column">
@@ -295,12 +298,15 @@ function App() {
               </div>
               <p className="panel-description">서버의 합성 예제를 불러오거나 JSON을 수정한 뒤 검증하고 저장할 수 있습니다.</p>
               <div className="button-row">
+                <select aria-label="합성 예제" value={example} disabled={operation !== null} onChange={(event) => setExample(event.target.value as ExampleProject)}>
+                  {(Object.keys(exampleLabels) as ExampleProject[]).map((name) => <option key={name} value={name}>{exampleLabels[name]}</option>)}
+                </select>
                 <button type="button" className="button-secondary" disabled={operation !== null} onClick={() => run('demo', async () => {
-                  const project = await getDemoProject()
-                  applyProject(project, '합성 데모')
+                  const project = await getExampleProject(example)
+                  applyProject(project, exampleLabels[example])
                   setSavedMeta(null)
-                  setNotice({ kind: 'success', title: '데모 준비 완료', message: `${project.project_id} 프로젝트를 불러왔습니다.` })
-                })}>데모 다시 불러오기</button>
+                  setNotice({ kind: 'success', title: '예제 준비 완료', message: `${project.project_id} 프로젝트를 불러왔습니다.` })
+                })}>예제 불러오기</button>
                 <button type="button" className="button-secondary" disabled={operation !== null || !projectText} onClick={() => run('save', async () => {
                   const saved = await saveProject(editedProject())
                   setSavedMeta({ revision: saved.revision, updatedAt: saved.updated_at })
@@ -350,7 +356,7 @@ function App() {
                   setSavedMeta(null)
                   setNotice(null)
                 }}
-                placeholder="백엔드를 실행하면 합성 데모 JSON이 자동으로 나타납니다."
+                placeholder="백엔드를 실행하면 합성 예제 JSON이 자동으로 나타납니다."
               />
               <div className="validation-row">
                 <button type="button" className="button-secondary" disabled={operation !== null || !projectText} onClick={() => run('validate', async () => {
@@ -394,7 +400,7 @@ function App() {
                 <div className="empty-result">
                   <div className="empty-symbol">⌁</div>
                   <strong>아직 계산 결과가 없습니다.</strong>
-                  <p>데모 프로젝트를 확인한 뒤 ‘경로 계산 실행’을 눌러 주세요. 경로와 검증 결과가 여기에 표시됩니다.</p>
+                  <p>예제 프로젝트를 확인한 뒤 ‘경로 계산 실행’을 눌러 주세요. 경로와 검증 결과가 여기에 표시됩니다.</p>
                 </div>
               ) : (
                 <>

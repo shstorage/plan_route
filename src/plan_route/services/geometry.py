@@ -27,5 +27,12 @@ def expand_aabb(box: AABB, radius_m: float) -> AABB:
 
 
 def effective_pipe_radius_m(pipe: Pipe) -> float:
-    """Radius of the insulated pipe outside surface, excluding rule clearance."""
-    return pipe.outer_diameter_m / 2 + pipe.insulation_thickness_m
+    """Radius of the pipe envelope: insulated surface plus the pipe's own margin.
+
+    Rule clearances (MIN_CLEARANCE) are measured from this envelope.
+    """
+    return (
+        pipe.outer_diameter_m / 2
+        + pipe.insulation_thickness_m
+        + pipe.clearance_margin_m
+    )

@@ -2,16 +2,14 @@
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from functools import cached_property
+from itertools import product
 from math import ceil, floor, isclose, isfinite
 from types import MappingProxyType
 
 from plan_route.models.engineering import EngineeringProject
 from plan_route.models.geometry import AABB, GridIndex, Point3
-from plan_route.services.geometry import (
-    aabb_intersects,
-    effective_pipe_radius_m,
-    expand_aabb,
-)
+from plan_route.services.geometry import effective_pipe_radius_m, expand_aabb
 
 _GRID_TOLERANCE = 1e-9  # Relative to one cell, only for floating-point arithmetic.
 
@@ -35,11 +33,56 @@ class GridSpec:
         if not isfinite(self.resolution_m) or self.resolution_m <= 0:
             raise ValueError("resolution_m must be finite and positive")
 
-    @property
+    @cached_property
     def shape(self) -> GridIndex:
         return tuple(
             _cell_count(high - low, self.resolution_m)
             for low, high in zip(self.bounds_m.min_m, self.bounds_m.max_m, strict=True)
+        )
+
+    @cached_property
+    def axis_intervals(self) -> tuple[tuple[tuple[float, float], ...], ...]:
+        """Per-axis (cell_min, cell_max) in metres; a cell box is their product."""
+        return tuple(
+            tuple(
+                (
+                    low + value * self.resolution_m,
+                    high
+                    if value == count - 1
+                    else min(low + (value + 1) * self.resolution_m, high),
+                )
+                for value in range(count)
+            )
+            for low, high, count in zip(
+                self.bounds_m.min_m, self.bounds_m.max_m, self.shape, strict=True
+            )
+        )
+
+    def _axis_touching(self, axis: int, box_min: float, box_max: float) -> list[int]:
+        intervals = self.axis_intervals[axis]
+        # Index window is a superset; the exact closed-interval test decides.
+        first = max(
+            floor((box_min - self.bounds_m.min_m[axis]) / self.resolution_m) - 1, 0
+        )
+        last = min(
+            floor((box_max - self.bounds_m.min_m[axis]) / self.resolution_m) + 1,
+            len(intervals) - 1,
+        )
+        return [
+            value
+            for value in range(first, last + 1)
+            if intervals[value][0] <= box_max and box_min <= intervals[value][1]
+        ]
+
+    def cells_touching(self, box: AABB) -> set[GridIndex]:
+        """Cells whose closed box intersects `box`, same rule as aabb_intersects."""
+        return set(
+            product(
+                *(
+                    self._axis_touching(axis, box.min_m[axis], box.max_m[axis])
+                    for axis in range(3)
+                )
+            )
         )
 
     def contains_index(self, index: GridIndex) -> bool:
@@ -72,28 +115,22 @@ class GridSpec:
     def cell_bounds(self, index: GridIndex) -> AABB:
         if not self.contains_index(index):
             raise ValueError("grid index is outside grid bounds")
-        minimum = tuple(
-            low + value * self.resolution_m
-            for low, value in zip(self.bounds_m.min_m, index, strict=True)
+        intervals = [
+            self.axis_intervals[axis][value] for axis, value in enumerate(index)
+        ]
+        return AABB(
+            min_m=tuple(low for low, _ in intervals),
+            max_m=tuple(high for _, high in intervals),
         )
-        maximum = tuple(
-            high
-            if value == count - 1
-            else min(low + (value + 1) * self.resolution_m, high)
-            for low, high, value, count in zip(
-                self.bounds_m.min_m,
-                self.bounds_m.max_m,
-                index,
-                self.shape,
-                strict=True,
-            )
-        )
-        return AABB(min_m=minimum, max_m=maximum)
 
     def grid_to_world(self, index: GridIndex) -> Point3:
-        cell = self.cell_bounds(index)
+        if not self.contains_index(index):
+            raise ValueError("grid index is outside grid bounds")
         return tuple(
-            (low + high) / 2 for low, high in zip(cell.min_m, cell.max_m, strict=True)
+            (low + high) / 2
+            for low, high in (
+                self.axis_intervals[axis][value] for axis, value in enumerate(index)
+            )
         )
 
     def iter_indices(self) -> Iterator[GridIndex]:
@@ -167,25 +204,27 @@ def voxelize_project(project: EngineeringProject, pipe_id: str) -> VoxelGrid:
         resolution_m=project.routing_config.grid_resolution_m,
     )
     inflated_obstacles = [expand_aabb(item.shape, radius) for item in project.obstacles]
-    interior: set[GridIndex] = set()
-    obstacles: set[GridIndex] = set()
-    zones: dict[str, set[GridIndex]] = {zone.id: set() for zone in project.zones}
     building = project.building.bounds_m
-
-    for index in spec.iter_indices():
-        cell = spec.cell_bounds(index)
-        if all(
-            low + radius <= cell_low and cell_high <= high - radius
-            for low, cell_low, cell_high, high in zip(
-                building.min_m, cell.min_m, cell.max_m, building.max_m, strict=True
+    # The interior test is separable per axis, so the interior set is a product.
+    interior = set(
+        product(
+            *(
+                [
+                    value
+                    for value, (cell_low, cell_high) in enumerate(
+                        spec.axis_intervals[axis]
+                    )
+                    if building.min_m[axis] + radius <= cell_low
+                    and cell_high <= building.max_m[axis] - radius
+                ]
+                for axis in range(3)
             )
-        ):
-            interior.add(index)
-        if any(aabb_intersects(cell, box) for box in inflated_obstacles):
-            obstacles.add(index)
-        for zone in project.zones:
-            if aabb_intersects(cell, zone.shape):
-                zones[zone.id].add(index)
+        )
+    )
+    obstacles: set[GridIndex] = set()
+    for box in inflated_obstacles:
+        obstacles |= spec.cells_touching(box)
+    zones = {zone.id: spec.cells_touching(zone.shape) for zone in project.zones}
 
     return VoxelGrid(
         spec=spec,

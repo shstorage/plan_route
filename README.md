@@ -24,7 +24,8 @@ uv run uvicorn plan_route.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 - Health: http://127.0.0.1:8000/api/health → `{"status":"ok"}`
-- 합성 예제: http://127.0.0.1:8000/api/projects/demo
+- 합성 플랜트 예제(UI 시작값, 60×40×12 m 2개 층): http://127.0.0.1:8000/api/projects/starter
+- 소형 테스트 데모(12×10×4 m, 단위 테스트 기준): http://127.0.0.1:8000/api/projects/demo
 - API 문서: http://127.0.0.1:8000/docs
 
 프로젝트 루트의 터미널 2:
@@ -224,10 +225,24 @@ EngineeringProject JSON이며 Konva `stage.toJSON()`이나 화면 픽셀을 저�
 AABB `min_m`/`max_m`와 Port `position_m`으로 되돌려 기록합니다.
 
 - 도구: 선택, 화면 이동(pan), 벽 추가, Zone 추가, Port 추가, 휠/버튼 확대·축소, 화면 맞춤.
+- 벽/Zone 추가: 도면에서 드래그해 직사각형을 그립니다(두 모서리 모두 스냅, z는 선택 층 범위).
+  클릭만 하면 0.5 m 기본 정사각형이 생깁니다. 추가 도구에서는 기존 객체 위에도 그릴 수 있습니다.
+- Port 추가: 클릭한 위치에 생성하며, 높이는 같은 층의 기존 Port 높이(없으면 바닥 + 1 m, 층 높이의 절반 이하)를 씁니다.
+- 삭제: 선택 후 속성 패널의 `삭제` 또는 Delete/Backspace 키. 규칙 대상인 형상, 배관이 연결된 Port,
+  장비의 마지막 Port는 삭제를 막고 이유를 표시합니다.
+- 탐색 도메인 카드(도면 위): 도면(캔버스) = 경로 탐색 범위 = `building.bounds_m`(m)입니다. X/Y/Z 범위,
+  층 바닥·천장 z, 격자 간격 `routing_config.grid_resolution_m`를 바꾸며 격자 칸 수를 미리 보여 줍니다.
+  40만 칸 초과는 느릴 수 있다고 경고하고, 300만 칸 초과·0.05 m 미만 격자·범위 밖에 남는 객체는 거부합니다.
+- 배관 단면 카드(도면 위): 선택한 배관의 외경·보온재 두께·추가 마진을 **mm로 입력**하고 m로 저장합니다.
+  단면 그림과 함께 `외곽 지름 = 외경 + 2 × (보온재 + 마진)`을 보여 줍니다. 격자 차단, 규칙 컴파일,
+  독립 Validator 모두 이 외곽을 배관 반경으로 사용하며 MIN_CLEARANCE 거리도 외곽 표면에서 잽니다.
+  마진(`clearance_margin_m`, 기본 0)은 사용자가 정하는 연구용 가정값이며 규정 값이 아닙니다.
 - 층 선택: 선택 층의 z 범위와 겹치는 형상·Port와 그 층으로 잘라낸 경로 구간만 표시합니다.
-- 스냅: `routing_config.grid_resolution_m` 간격, 좌표계 원점 기준. 끌 수 있습니다.
+  `kind: slab` 장애물(층 바닥판)은 점선 외곽선으로만 그리고 내부 클릭은 아래 객체로 전달합니다.
+- 스냅: 격자 간격과 같고 좌표계 원점 기준입니다. 끌 수 있습니다.
 - 선택 객체를 드래그해 이동하고 모서리 점으로 크기를 바꿉니다. 속성 패널에서 m 좌표를 직접 입력할 수 있습니다.
-- 잘못된 값(비숫자, 0.1 m 미만 변, 건물 경계 밖, 없는 ID, 거리 없는 MIN_CLEARANCE)은 반영하지 않고 오류를 표시합니다.
+- 잘못된 값(비숫자, 0.1 m 미만 변, 건물 경계 밖, 없는 ID, 거리 없는 MIN_CLEARANCE)은 반영하지 않고
+  도면 위에 `반영되지 않음` 오류를 띄우며, 입력칸은 저장된 값으로 되돌립니다.
 - Port를 선택한 배관의 시작/도착 Port로 지정할 수 있습니다.
 - 규칙 타입·대상·거리·승인 상태를 편집하고, 선택한 형상에 출처를 갖춘 새 규칙을 `draft`로 만들 수 있습니다.
   미승인 규칙이 걸린 배관에는 실행 불가 안내가 나오며 서버는 `UNAPPROVED_RULE`을 반환합니다.
@@ -238,6 +253,17 @@ AABB `min_m`/`max_m`와 Port `position_m`으로 되돌려 기록합니다.
 
 도면을 수정하면 이전 경로 결과는 지워지므로 `경로 계산 실행`을 다시 눌러야 합니다.
 JSON 텍스트 영역과 서버 저장은 같은 EngineeringProject를 사용합니다.
+
+### 합성 플랜트 예제 (UI 시작값)
+
+`SYNTH-PLANT-001`은 실제 시설이 아닌 **합성 2층 공정 건물**입니다: 60×40×12 m, 층고 6 m, 격자 0.5 m(230,400칸).
+문·배관 관통부가 있는 내벽, 배관 샤프트 개구부가 있는 L2 바닥판, 기둥 4개, 장비 4대(탱크·펌프·열교환기·상부 탱크),
+배관 3개(외경 168.3 / 114.3 / 88.9 mm), 전기실 KEEP_OUT, L2 케이블트레이 통로 0.5 m MIN_CLEARANCE를 포함합니다.
+모든 규칙은 `synthetic_assumption`이며 수치는 예시일 뿐 실제 설계 기준이 아닙니다.
+화면의 `예제 불러오기`에서 소형 데모(12×10 m)로 바꿀 수 있습니다.
+
+측정(이 PC, 경로 1회): PIPE-101 0.3 s, PIPE-102 2.0 s, PIPE-103(층간) 2.9 s. 격자 마스킹은 장애물이 닿는
+칸 범위만 검사하도록 바꿨으며 데모·플랜트 예제의 격자/규칙 마스크와 경로 결과가 변경 전과 동일함을 확인했습니다.
 
 ## 폴더 구조
 
@@ -266,6 +292,8 @@ frontend/src/editor/model.ts 형상·Port·규칙 편집 순수 함수와 입력
 frontend/src/editor/history.ts JSON 스냅샷 Undo/Redo
 frontend/src/editor/PlanEditor.tsx React Konva 층별 도면
 frontend/src/editor/EditorInspector.tsx 좌표·규칙 속성 패널
+frontend/src/editor/DomainPanel.tsx 탐색 도메인·격자, 배관 단면(외경·보온재·마진) 카드
+src/plan_route/fixtures/plant_starter_project.json 합성 플랜트 예제(UI 시작값)
 frontend/src/editor/editor.test.mjs 좌표·편집·기록 단위 테스트(node --test)
 tests/test_health.py       HTTP 응답 및 CORS 테스트
 tests/test_schemas.py      스키마·참조·422 응답 테스트
@@ -275,6 +303,7 @@ tests/test_constraint_compiler.py 규칙 적용·오류·API 테스트
 tests/test_path_validator.py 독립 검증·라우팅 API 테스트
 tests/test_project_store.py 저장·재로드·개정·경로침입 방지 테스트
 tests/test_p07_editor_scenario.py 벽 이동 후 경로 변화 시나리오
+tests/test_plant_starter.py 플랜트 예제 라우팅·배관 마진 반영 테스트
 scripts/export_schema.py   JSON Schema 생성
 docs/schema/               생성된 JSON Schema
 docs/decisions/            단계별 설계 결정
@@ -321,7 +350,11 @@ API 테스트는 정상 응답, 허용/비허용 origin과 preflight, 잘못된 
    또는 다른 위치로 옮기고, 속성 패널 좌표와 하단 커서 좌표(m)가 일치하는지 확인한 뒤 다시 실행해
    경로가 바뀌는 것을 확인합니다. `실행 취소`로 원위치, `다시 실행`으로 이동 상태를 복원합니다.
 7. (P07) 속성 패널에 X 최소를 X 최대보다 크게 넣거나 건물 밖 좌표를 넣으면 반영되지 않고 오류가 표시되는지 확인합니다.
-8. (P07) 규칙 패널에서 `RULE-001` 승인 상태를 `draft`로 적용하면 도면 경고와 Zone 점선, 실행 시 `UNAPPROVED_RULE`을 확인합니다.
+8. (P07) `벽 추가`로 드래그해 벽을 그리고, Delete 키로 지웁니다. `ZONE-A`를 삭제하려 하면 RULE-001 때문에 거부됩니다.
+9. (P07) `탐색 도메인`을 펼쳐 격자 0.1을 입력하면 칸 수 한도 초과 안내가 나오는지, X 최대를 80으로 적용하면 도면이 넓어지는지 확인합니다.
+   소형 데모에서는 X 최대 8로 줄이면 PORT-B 때문에 거부됩니다.
+10. (P07) `배관 단면`에서 PIPE-102 마진을 100 mm로 적용하면 외곽 지름 394.3 mm와 단면 그림이 바뀌는지 확인합니다.
+11. (P07) 규칙 패널에서 `RULE-001` 승인 상태를 `draft`로 적용하면 도면 경고와 Zone 점선, 실행 시 `UNAPPROVED_RULE`을 확인합니다.
 
 health는 API 프로세스 응답만 확인하며 solver나 데이터 저장소의 준비 상태를
 보장하지 않습니다. 경로·규칙 검증은 별도 결과에 표시됩니다.

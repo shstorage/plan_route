@@ -14,7 +14,7 @@ from plan_route.models.constraints import (
 )
 from plan_route.models.engineering import EngineeringProject
 from plan_route.models.geometry import AABB, GridIndex
-from plan_route.services.geometry import aabb_intersects, expand_aabb
+from plan_route.services.geometry import expand_aabb
 from plan_route.services.voxel_grid import VoxelGrid, voxelize_project
 
 
@@ -194,13 +194,10 @@ def compile_constraints(project: EngineeringProject, pipe_id: str) -> Compilatio
                 fingerprint,
                 str(error),
             )
-        covered = {
-            index
-            for index in grid.interior_cells
-            if any(
-                aabb_intersects(grid.spec.cell_bounds(index), box) for box in targets
-            )
-        }
+        touched: set[GridIndex] = set()
+        for box in targets:
+            touched |= grid.spec.cells_touching(box)
+        covered = touched & grid.interior_cells
         rule_cells_by_id[rule.id] = covered
         newly_blocked = covered - grid.obstacle_cells - blocked
         blocked.update(covered)

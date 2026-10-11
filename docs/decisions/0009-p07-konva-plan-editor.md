@@ -27,6 +27,15 @@ Snapshots are small for synthetic projects and make restored states exactly
 equal to what would be saved. Editing the raw JSON text resets history, since
 that text may be invalid until it is validated again.
 
+Add tools draw boxes by dragging; while an add tool is active, existing shapes
+stop listening for pointer events so drawing over a zone does not select it.
+Deletion is refused while a rule targets the shape, a pipe uses the port, or
+the port is its equipment's last one, mirroring backend reference validation
+instead of silently cascading. The building bounds (the canvas extent) and
+floor slabs are edited as domain values; shrinking them is refused while any
+object would fall outside. Editor errors are shown over the canvas, and the
+inspector resets its fields to the stored values after a rejected edit.
+
 Rules created in the editor always start as `draft` with a
 `synthetic_assumption` source; the user must set `approved` explicitly. The
 editor only warns about unapproved rules; enforcement stays on the server,
