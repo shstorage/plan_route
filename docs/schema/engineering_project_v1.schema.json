@@ -1,0 +1,693 @@
+{
+  "$defs": {
+    "AABB": {
+      "additionalProperties": false,
+      "properties": {
+        "max_m": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Max M",
+          "type": "array"
+        },
+        "min_m": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Min M",
+          "type": "array"
+        },
+        "type": {
+          "const": "aabb",
+          "default": "aabb",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "min_m",
+        "max_m"
+      ],
+      "title": "AABB",
+      "type": "object"
+    },
+    "Building": {
+      "additionalProperties": false,
+      "properties": {
+        "bounds_m": {
+          "$ref": "#/$defs/AABB"
+        },
+        "floors": {
+          "items": {
+            "$ref": "#/$defs/Floor"
+          },
+          "minItems": 1,
+          "title": "Floors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "bounds_m",
+        "floors"
+      ],
+      "title": "Building",
+      "type": "object"
+    },
+    "Constraint": {
+      "additionalProperties": false,
+      "properties": {
+        "approved_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approved At"
+        },
+        "approved_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approved By"
+        },
+        "id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/RuleParameters"
+        },
+        "scope": {
+          "$ref": "#/$defs/ConstraintScope"
+        },
+        "severity": {
+          "const": "hard",
+          "title": "Severity",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/RuleSource"
+        },
+        "status": {
+          "$ref": "#/$defs/ConstraintStatus"
+        },
+        "type": {
+          "$ref": "#/$defs/ConstraintType"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "severity",
+        "scope",
+        "parameters",
+        "source",
+        "status"
+      ],
+      "title": "Constraint",
+      "type": "object"
+    },
+    "ConstraintScope": {
+      "additionalProperties": false,
+      "properties": {
+        "pipe_ids": {
+          "items": {
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Pipe Ids",
+          "type": "array"
+        },
+        "target_ids": {
+          "items": {
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Target Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "pipe_ids",
+        "target_ids"
+      ],
+      "title": "ConstraintScope",
+      "type": "object"
+    },
+    "ConstraintStatus": {
+      "enum": [
+        "draft",
+        "needs_review",
+        "approved",
+        "rejected"
+      ],
+      "title": "ConstraintStatus",
+      "type": "string"
+    },
+    "ConstraintType": {
+      "enum": [
+        "KEEP_OUT",
+        "MIN_CLEARANCE"
+      ],
+      "title": "ConstraintType",
+      "type": "string"
+    },
+    "CoordinateFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "origin_m": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Origin M",
+          "type": "array"
+        },
+        "unit": {
+          "const": "m",
+          "title": "Unit",
+          "type": "string"
+        },
+        "up_axis": {
+          "const": "z",
+          "title": "Up Axis",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "unit",
+        "up_axis",
+        "origin_m"
+      ],
+      "title": "CoordinateFrame",
+      "type": "object"
+    },
+    "CostWeights": {
+      "additionalProperties": false,
+      "properties": {
+        "bend_per_event": {
+          "minimum": 0,
+          "title": "Bend Per Event",
+          "type": "number"
+        },
+        "length_per_m": {
+          "exclusiveMinimum": 0,
+          "title": "Length Per M",
+          "type": "number"
+        },
+        "preferred_zone_factor": {
+          "exclusiveMinimum": 0,
+          "title": "Preferred Zone Factor",
+          "type": "number"
+        }
+      },
+      "required": [
+        "length_per_m",
+        "bend_per_event",
+        "preferred_zone_factor"
+      ],
+      "title": "CostWeights",
+      "type": "object"
+    },
+    "Equipment": {
+      "additionalProperties": false,
+      "properties": {
+        "geometry_ref": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Geometry Ref"
+        },
+        "id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Kind",
+          "type": "string"
+        },
+        "ports": {
+          "items": {
+            "$ref": "#/$defs/Port"
+          },
+          "minItems": 1,
+          "title": "Ports",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "ports"
+      ],
+      "title": "Equipment",
+      "type": "object"
+    },
+    "Floor": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "z_max_m": {
+          "title": "Z Max M",
+          "type": "number"
+        },
+        "z_min_m": {
+          "title": "Z Min M",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "z_min_m",
+        "z_max_m"
+      ],
+      "title": "Floor",
+      "type": "object"
+    },
+    "Obstacle": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Kind",
+          "type": "string"
+        },
+        "shape": {
+          "$ref": "#/$defs/AABB"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "shape"
+      ],
+      "title": "Obstacle",
+      "type": "object"
+    },
+    "Pipe": {
+      "additionalProperties": false,
+      "properties": {
+        "from_port_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "From Port Id",
+          "type": "string"
+        },
+        "id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "insulation_thickness_m": {
+          "minimum": 0,
+          "title": "Insulation Thickness M",
+          "type": "number"
+        },
+        "outer_diameter_m": {
+          "exclusiveMinimum": 0,
+          "title": "Outer Diameter M",
+          "type": "number"
+        },
+        "to_port_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "To Port Id",
+          "type": "string"
+        },
+        "train_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Train Id"
+        }
+      },
+      "required": [
+        "id",
+        "from_port_id",
+        "to_port_id",
+        "outer_diameter_m",
+        "insulation_thickness_m"
+      ],
+      "title": "Pipe",
+      "type": "object"
+    },
+    "Port": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "orientation": {
+          "enum": [
+            "+x",
+            "-x",
+            "+y",
+            "-y",
+            "+z",
+            "-z"
+          ],
+          "title": "Orientation",
+          "type": "string"
+        },
+        "position_m": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Position M",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "position_m",
+        "orientation"
+      ],
+      "title": "Port",
+      "type": "object"
+    },
+    "RoutingConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "cost_weights": {
+          "$ref": "#/$defs/CostWeights"
+        },
+        "grid_resolution_m": {
+          "exclusiveMinimum": 0,
+          "title": "Grid Resolution M",
+          "type": "number"
+        },
+        "search_limits": {
+          "$ref": "#/$defs/SearchLimits"
+        }
+      },
+      "required": [
+        "grid_resolution_m",
+        "cost_weights",
+        "search_limits"
+      ],
+      "title": "RoutingConfig",
+      "type": "object"
+    },
+    "RuleParameters": {
+      "additionalProperties": false,
+      "properties": {
+        "distance_basis": {
+          "anyOf": [
+            {
+              "const": "insulated_pipe_surface_to_target_surface",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance Basis"
+        },
+        "distance_m": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance M"
+        }
+      },
+      "title": "RuleParameters",
+      "type": "object"
+    },
+    "RuleSource": {
+      "additionalProperties": false,
+      "properties": {
+        "clause_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Clause Id",
+          "type": "string"
+        },
+        "document_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Document Id",
+          "type": "string"
+        },
+        "document_revision": {
+          "minLength": 1,
+          "title": "Document Revision",
+          "type": "string"
+        },
+        "evidence_text": {
+          "minLength": 1,
+          "title": "Evidence Text",
+          "type": "string"
+        },
+        "source_type": {
+          "enum": [
+            "synthetic_assumption",
+            "public_reference"
+          ],
+          "title": "Source Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_type",
+        "document_id",
+        "document_revision",
+        "clause_id",
+        "evidence_text"
+      ],
+      "title": "RuleSource",
+      "type": "object"
+    },
+    "SearchLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_expansions": {
+          "exclusiveMinimum": 0,
+          "title": "Max Expansions",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_expansions"
+      ],
+      "title": "SearchLimits",
+      "type": "object"
+    },
+    "Zone": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "shape": {
+          "$ref": "#/$defs/AABB"
+        },
+        "zone_type": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Zone Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "zone_type",
+        "shape"
+      ],
+      "title": "Zone",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "building": {
+      "$ref": "#/$defs/Building"
+    },
+    "constraints": {
+      "items": {
+        "$ref": "#/$defs/Constraint"
+      },
+      "title": "Constraints",
+      "type": "array"
+    },
+    "coordinate_frame": {
+      "$ref": "#/$defs/CoordinateFrame"
+    },
+    "equipment": {
+      "items": {
+        "$ref": "#/$defs/Equipment"
+      },
+      "title": "Equipment",
+      "type": "array"
+    },
+    "obstacles": {
+      "items": {
+        "$ref": "#/$defs/Obstacle"
+      },
+      "title": "Obstacles",
+      "type": "array"
+    },
+    "pipes": {
+      "items": {
+        "$ref": "#/$defs/Pipe"
+      },
+      "title": "Pipes",
+      "type": "array"
+    },
+    "project_id": {
+      "minLength": 1,
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+      "title": "Project Id",
+      "type": "string"
+    },
+    "routing_config": {
+      "$ref": "#/$defs/RoutingConfig"
+    },
+    "schema_version": {
+      "const": "1.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "study_type": {
+      "const": "synthetic_benchmark",
+      "title": "Study Type",
+      "type": "string"
+    },
+    "unit_system": {
+      "const": "SI",
+      "title": "Unit System",
+      "type": "string"
+    },
+    "zones": {
+      "items": {
+        "$ref": "#/$defs/Zone"
+      },
+      "title": "Zones",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "project_id",
+    "study_type",
+    "unit_system",
+    "coordinate_frame",
+    "building",
+    "obstacles",
+    "zones",
+    "equipment",
+    "pipes",
+    "constraints",
+    "routing_config"
+  ],
+  "title": "EngineeringProject",
+  "type": "object"
+}

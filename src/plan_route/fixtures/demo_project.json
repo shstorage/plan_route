@@ -1,0 +1,78 @@
+{
+  "schema_version": "1.0.0",
+  "project_id": "SYNTH-DEMO-001",
+  "study_type": "synthetic_benchmark",
+  "unit_system": "SI",
+  "coordinate_frame": {
+    "name": "BUILDING_LOCAL",
+    "unit": "m",
+    "up_axis": "z",
+    "origin_m": [0, 0, 0]
+  },
+  "building": {
+    "bounds_m": {"min_m": [0, 0, 0], "max_m": [12, 10, 4]},
+    "floors": [{"id": "L1", "z_min_m": 0, "z_max_m": 4}]
+  },
+  "obstacles": [
+    {
+      "id": "WALL-01",
+      "kind": "wall",
+      "shape": {"type": "aabb", "min_m": [5, 0, 0], "max_m": [5.5, 7, 4]}
+    }
+  ],
+  "zones": [
+    {
+      "id": "ZONE-A",
+      "zone_type": "restricted",
+      "shape": {"type": "aabb", "min_m": [4, 4, 0], "max_m": [7, 8, 4]}
+    }
+  ],
+  "equipment": [
+    {
+      "id": "PUMP-101",
+      "kind": "pump",
+      "ports": [{"id": "PORT-A", "position_m": [1, 2, 1], "orientation": "+x"}]
+    },
+    {
+      "id": "HX-101",
+      "kind": "heat_exchanger",
+      "ports": [{"id": "PORT-B", "position_m": [11, 2, 1], "orientation": "-x"}]
+    }
+  ],
+  "pipes": [
+    {
+      "id": "PIPE-101",
+      "from_port_id": "PORT-A",
+      "to_port_id": "PORT-B",
+      "outer_diameter_m": 0.1,
+      "insulation_thickness_m": 0.02,
+      "train_id": "A"
+    }
+  ],
+  "constraints": [
+    {
+      "id": "RULE-001",
+      "type": "KEEP_OUT",
+      "severity": "hard",
+      "scope": {"pipe_ids": ["PIPE-101"], "target_ids": ["ZONE-A"]},
+      "parameters": {},
+      "source": {
+        "source_type": "synthetic_assumption",
+        "document_id": "DEMO-SPEC",
+        "document_revision": "1",
+        "clause_id": "TEST-01",
+        "evidence_text": "PIPE-101 shall not enter ZONE-A"
+      },
+      "status": "approved"
+    }
+  ],
+  "routing_config": {
+    "grid_resolution_m": 0.5,
+    "cost_weights": {
+      "length_per_m": 1.0,
+      "bend_per_event": 2.0,
+      "preferred_zone_factor": 0.8
+    },
+    "search_limits": {"max_expansions": 500000}
+  }
+}
