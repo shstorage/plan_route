@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react'
-import type { Constraint, EngineeringProject, Point3, Port } from '../api/client'
+import type { EngineeringProject, Point3, Port, Waypoint } from '../api/client'
 import {
-  connectPort, createRule, updateBox, updatePort, updateRule,
-  type NewRule, type RuleEdit, type Selection,
+  RULE_STATUS_TEXT, RULE_TYPE_TEXT, connectPort, describeRule, findWaypoint, portRole, reorderWaypoint, updateBox, updatePort,
+  updateWaypoint, type Selection,
 } from './model.ts'
 
 type Props = {
@@ -13,6 +13,10 @@ type Props = {
   onCommit: (project: EngineeringProject) => void
   onError: (message: string) => void
   onDelete: () => void
+  /** Opens a rule in the rules panel (and highlights its targets). */
+  onFocusRule: (ruleId: string) => void
+  /** Opens the new-rule form in the rules panel with this target. */
+  onAddRule: (targetId: string) => void
 }
 
 type GeometryDraft = {
@@ -20,15 +24,23 @@ type GeometryDraft = {
   maxX: string; maxY: string; maxZ: string
   x: string; y: string; z: string
   orientation: Port['orientation']
+  passAxis: NonNullable<Waypoint['pass_axis']> | ''
+  note: string
 }
 
 const emptyGeometry: GeometryDraft = {
   minX: '', minY: '', minZ: '', maxX: '', maxY: '', maxZ: '',
-  x: '', y: '', z: '', orientation: '+x',
+  x: '', y: '', z: '', orientation: '+x', passAxis: '', note: '',
 }
 
 function draftFor(project: EngineeringProject, selection: Selection | null): GeometryDraft {
   if (!selection) return emptyGeometry
+  if (selection.kind === 'waypoint') {
+    const waypoint = findWaypoint(project, selection.id)?.waypoint
+    if (!waypoint) return emptyGeometry
+    const [x, y, z] = waypoint.position_m.map(String)
+    return { ...emptyGeometry, x, y, z, passAxis: waypoint.pass_axis ?? '', note: waypoint.note ?? '' }
+  }
   if (selection.kind === 'port') {
     const port = project.equipment.flatMap((item) => item.ports).find((item) => item.id === selection.id)
     if (!port) return emptyGeometry
@@ -48,41 +60,17 @@ function numeric(text: string): number {
   return Number(text)
 }
 
-const emptyNewRule: NewRule = {
-  pipeId: '', targetId: '', type: 'KEEP_OUT', distanceText: '',
-  documentId: '', revision: '', clauseId: '', evidence: '',
-}
-
-function draftForRule(rule: Constraint | undefined): RuleEdit {
-  return {
-    type: rule?.type ?? 'KEEP_OUT',
-    status: rule?.status ?? 'draft',
-    targetId: rule?.scope.target_ids[0] ?? '',
-    distanceText: rule?.parameters.distance_m == null ? '' : String(rule.parameters.distance_m),
-  }
-}
-
-export function EditorInspector({ project, selection, selectedPipeId, busy, onCommit, onError, onDelete }: Props) {
+export function EditorInspector({ project, selection, selectedPipeId, busy, onCommit, onError, onDelete, onFocusRule, onAddRule }: Props) {
   const [geometry, setGeometry] = useState<GeometryDraft>(() => draftFor(project, selection))
-  const [ruleId, setRuleId] = useState(() =>
-    project.constraints.findLast((rule) => selection && rule.scope.target_ids.includes(selection.id))?.id
-      ?? project.constraints[0]?.id ?? '')
-  const [ruleEdit, setRuleEdit] = useState<RuleEdit>(() => draftForRule(project.constraints.find((rule) => rule.id === ruleId)))
-  const [showNewRule, setShowNewRule] = useState(false)
-  const [newRule, setNewRule] = useState<NewRule>(() => ({
-      ...emptyNewRule,
-      pipeId: selectedPipeId,
-      targetId: selection?.id ?? '',
-      type: selection?.kind === 'obstacle' ? 'MIN_CLEARANCE' : 'KEEP_OUT',
-    }))
-
-  const rule = project.constraints.find((item) => item.id === ruleId)
 
   function applyGeometry(event: FormEvent) {
     event.preventDefault()
     if (!selection) return
     try {
-      if (selection.kind === 'port') {
+      if (selection.kind === 'waypoint') {
+        const point: Point3 = [numeric(geometry.x), numeric(geometry.y), numeric(geometry.z)]
+        onCommit(updateWaypoint(project, selection.id, { position: point, passAxis: geometry.passAxis || null, note: geometry.note }))
+      } else if (selection.kind === 'port') {
         const point: Point3 = [numeric(geometry.x), numeric(geometry.y), numeric(geometry.z)]
         onCommit(updatePort(project, selection.id, point, geometry.orientation))
       } else {
@@ -98,41 +86,48 @@ export function EditorInspector({ project, selection, selectedPipeId, busy, onCo
     }
   }
 
-  function applyRule(event: FormEvent) {
-    event.preventDefault()
-    if (!rule) return
-    try { onCommit(updateRule(project, rule.id, ruleEdit)) }
-    catch (error) {
-      onError(error instanceof Error ? error.message : '규칙을 변경하지 못했습니다.')
-      setRuleEdit(draftForRule(rule))
-    }
-  }
-
-  function addRule(event: FormEvent) {
-    event.preventDefault()
-    try {
-      const added = createRule(project, newRule)
-      onCommit(added.project)
-      setRuleId(added.id)
-      setShowNewRule(false)
-    } catch (error) { onError(error instanceof Error ? error.message : '규칙을 만들지 못했습니다.') }
-  }
-
   const owner = selection?.kind === 'port'
     ? project.equipment.find((item) => item.ports.some((port) => port.id === selection.id))?.id
     : null
-  const targetOptions = ruleEdit.type === 'KEEP_OUT'
-    ? project.zones.map((item) => item.id)
-    : [...project.zones, ...project.obstacles].map((item) => item.id)
+  const objectRules = selection ? project.constraints.filter((rule) => rule.scope.target_ids.includes(selection.id)) : []
+  const waypointInfo = selection?.kind === 'waypoint' ? findWaypoint(project, selection.id) : null
+  const role = selection?.kind === 'port' ? portRole(project, selectedPipeId, selection.id) : null
+  const kindLabel = !selection ? '' : selection.kind === 'obstacle' ? '장애물' : selection.kind === 'zone' ? '제약 Zone'
+    : selection.kind === 'waypoint' ? '필수 경유점' : 'Port'
+
+  function reorder(delta: -1 | 1) {
+    if (!waypointInfo) return
+    try { onCommit(reorderWaypoint(project, waypointInfo.waypoint.id, delta)) }
+    catch (error) { onError(error instanceof Error ? error.message : '순서를 바꾸지 못했습니다.') }
+  }
 
   return (
     <aside className="editor-inspector" aria-label="도면 속성">
       <div className="inspector-heading"><span>속성</span><strong>{selection?.id ?? '객체 선택'}</strong></div>
-      {!selection ? <p className="inspector-empty">도면에서 벽체, Zone 또는 Port를 선택하면 좌표와 속성을 변경할 수 있습니다. 도메인 크기·격자·배관 단면은 도면 위 설정에서 바꿉니다.</p> : (
+      {!selection ? <p className="inspector-empty">도면에서 벽체, Zone, Port 또는 경유점을 선택하면 좌표와 속성을 변경할 수 있습니다. 도메인 크기·격자·배관 단면은 도면 위 설정에서 바꿉니다.</p> : (
         <form onSubmit={applyGeometry} className="inspector-form">
-          <div className="inspector-meta"><span>종류</span><strong>{selection.kind === 'obstacle' ? '장애물' : selection.kind === 'zone' ? '제약 Zone' : 'Port'}</strong></div>
+          <div className="inspector-meta"><span>종류</span><strong>{kindLabel}</strong></div>
           {owner && <div className="inspector-meta"><span>소유 장비</span><strong>{owner}</strong></div>}
-          {selection.kind === 'port' ? (
+          {role && <div className="inspector-meta"><span>{selectedPipeId}</span><strong className={`role-badge ${role}`}>{role === 'start' ? 'S · 시작점' : 'E · 끝점'}</strong></div>}
+          {waypointInfo && <div className="inspector-meta"><span>{waypointInfo.pipe.id} 순서</span><strong className="role-badge waypoint">{waypointInfo.index + 1} / {waypointInfo.pipe.waypoints!.length}</strong></div>}
+          {selection.kind === 'waypoint' ? (
+            <>
+              <div className="inspector-fields three">
+                {(['x', 'y', 'z'] as const).map((axis) => <label key={axis}>{axis.toUpperCase()} (m)<input type="number" step="any" value={geometry[axis]} onChange={(event) => setGeometry({ ...geometry, [axis]: event.target.value })} /></label>)}
+              </div>
+              <label className="inspector-select">통과 방향<select value={geometry.passAxis} onChange={(event) => setGeometry({ ...geometry, passAxis: event.target.value as GeometryDraft['passAxis'] })}>
+                <option value="">지정 안 함 · 이 점을 지나기만 함</option>
+                <option value="x">X축으로 곧게 통과 (X 방향 벽 관통)</option>
+                <option value="y">Y축으로 곧게 통과 (Y 방향 벽 관통)</option>
+                <option value="z">Z축으로 곧게 통과 (바닥판 관통)</option>
+              </select></label>
+              <label className="inspector-select">메모 · 근거<input maxLength={500} placeholder="예: 토목도면 C-101 슬리브, 철근탐사 결과" value={geometry.note} onChange={(event) => setGeometry({ ...geometry, note: event.target.value })} /></label>
+              <div className="inspector-actions">
+                <button type="button" className="button-secondary" disabled={busy || !waypointInfo || waypointInfo.index === 0} onClick={() => reorder(-1)}>↑ 앞으로</button>
+                <button type="button" className="button-secondary" disabled={busy || !waypointInfo || waypointInfo.index === waypointInfo.pipe.waypoints!.length - 1} onClick={() => reorder(1)}>↓ 뒤로</button>
+              </div>
+            </>
+          ) : selection.kind === 'port' ? (
             <>
               <div className="inspector-fields three">
                 {(['x', 'y', 'z'] as const).map((axis) => <label key={axis}>{axis.toUpperCase()} (m)<input type="number" step="any" value={geometry[axis]} onChange={(event) => setGeometry({ ...geometry, [axis]: event.target.value })} /></label>)}
@@ -150,7 +145,7 @@ export function EditorInspector({ project, selection, selectedPipeId, busy, onCo
             </div>
           )}
           <div className="inspector-actions">
-            <button type="submit" className="button-secondary" disabled={busy}>좌표 적용</button>
+            <button type="submit" className="button-secondary" disabled={busy}>{selection.kind === 'waypoint' ? '경유점 적용' : '좌표 적용'}</button>
             <button type="button" className="button-danger" disabled={busy} onClick={onDelete}>삭제</button>
           </div>
         </form>
@@ -161,57 +156,28 @@ export function EditorInspector({ project, selection, selectedPipeId, busy, onCo
           <button type="button" className="button-secondary" onClick={() => {
             try { onCommit(connectPort(project, selectedPipeId, 'from', selection.id)) }
             catch (error) { onError(error instanceof Error ? error.message : '시작 Port를 지정하지 못했습니다.') }
-          }}>시작 Port로 지정</button>
+          }}><span className="role-dot start" />시작 Port로 지정</button>
           <button type="button" className="button-secondary" onClick={() => {
             try { onCommit(connectPort(project, selectedPipeId, 'to', selection.id)) }
             catch (error) { onError(error instanceof Error ? error.message : '도착 Port를 지정하지 못했습니다.') }
-          }}>도착 Port로 지정</button>
+          }}><span className="role-dot end" />도착 Port로 지정</button>
         </div>
       )}
 
-      <div className="inspector-divider" />
-      <div className="inspector-heading"><span>Hard constraint</span><strong>제약 규칙</strong></div>
-      {project.constraints.length ? (
-        <>
-          <label className="inspector-select">규칙 ID<select value={ruleId} onChange={(event) => { setRuleId(event.target.value); setRuleEdit(draftForRule(project.constraints.find((item) => item.id === event.target.value))) }}>
-            {project.constraints.map((item) => <option key={item.id} value={item.id}>{item.id}</option>)}
-          </select></label>
-          {rule && <form onSubmit={applyRule} className="inspector-form">
-            <label className="inspector-select">규칙 타입<select value={ruleEdit.type} onChange={(event) => {
-              const type = event.target.value as Constraint['type']
-              const options = type === 'KEEP_OUT' ? project.zones : [...project.zones, ...project.obstacles]
-              setRuleEdit({ ...ruleEdit, type, targetId: options.some((item) => item.id === ruleEdit.targetId) ? ruleEdit.targetId : options[0]?.id ?? '' })
-            }}><option value="KEEP_OUT">KEEP_OUT · 진입 금지</option><option value="MIN_CLEARANCE">MIN_CLEARANCE · 최소 이격</option></select></label>
-            <label className="inspector-select">대상<select value={ruleEdit.targetId} onChange={(event) => setRuleEdit({ ...ruleEdit, targetId: event.target.value })}>
-              {targetOptions.map((id) => <option key={id} value={id}>{id}</option>)}
-            </select></label>
-            {ruleEdit.type === 'MIN_CLEARANCE' && <label className="inspector-select">표면 이격거리 (m)<input type="number" min="0" step="any" value={ruleEdit.distanceText} onChange={(event) => setRuleEdit({ ...ruleEdit, distanceText: event.target.value })} /></label>}
-            <label className="inspector-select">승인 상태<select value={ruleEdit.status} onChange={(event) => setRuleEdit({ ...ruleEdit, status: event.target.value as Constraint['status'] })}>
-              <option value="draft">draft · 초안</option><option value="needs_review">needs_review · 검토 대기</option><option value="approved">approved · 승인</option><option value="rejected">rejected · 거부</option>
-            </select></label>
-            {ruleEdit.status !== 'approved' && <p className="rule-warning">미승인 규칙이 있는 배관은 실행되지 않습니다.</p>}
-            <div className="rule-source">출처: {rule.source.document_id} · 개정 {rule.source.document_revision} · {rule.source.clause_id}</div>
-            <button type="submit" className="button-secondary">규칙 적용</button>
-          </form>}
-        </>
-      ) : <p className="inspector-empty">규칙이 없습니다.</p>}
-
-      {selection?.kind === 'zone' || selection?.kind === 'obstacle' ? (
-        <div className="new-rule">
-          <button type="button" className="button-secondary" onClick={() => setShowNewRule((value) => !value)}>{showNewRule ? '규칙 추가 취소' : '선택 객체에 규칙 추가'}</button>
-          {showNewRule && <form className="inspector-form" onSubmit={addRule}>
-            <p className="rule-warning">새 규칙은 초안으로 저장됩니다. 출처를 입력한 뒤 상태를 직접 승인해야 경로에 적용됩니다.</p>
-            <label className="inspector-select">배관<select value={newRule.pipeId} onChange={(event) => setNewRule({ ...newRule, pipeId: event.target.value })}>{project.pipes.map((pipe) => <option key={pipe.id} value={pipe.id}>{pipe.id}</option>)}</select></label>
-            <label className="inspector-select">타입<select value={newRule.type} onChange={(event) => setNewRule({ ...newRule, type: event.target.value as Constraint['type'] })}><option value="KEEP_OUT" disabled={selection.kind === 'obstacle'}>KEEP_OUT</option><option value="MIN_CLEARANCE">MIN_CLEARANCE</option></select></label>
-            {newRule.type === 'MIN_CLEARANCE' && <label className="inspector-select">표면 이격거리 (m)<input type="number" min="0" step="any" value={newRule.distanceText} onChange={(event) => setNewRule({ ...newRule, distanceText: event.target.value })} /></label>}
-            <label className="inspector-select">문서 ID<input value={newRule.documentId} onChange={(event) => setNewRule({ ...newRule, documentId: event.target.value })} /></label>
-            <label className="inspector-select">개정판<input value={newRule.revision} onChange={(event) => setNewRule({ ...newRule, revision: event.target.value })} /></label>
-            <label className="inspector-select">조항 ID<input value={newRule.clauseId} onChange={(event) => setNewRule({ ...newRule, clauseId: event.target.value })} /></label>
-            <label className="inspector-select">근거 문구<textarea rows={3} value={newRule.evidence} onChange={(event) => setNewRule({ ...newRule, evidence: event.target.value })} /></label>
-            <button type="submit" className="button-primary">초안 규칙 만들기</button>
-          </form>}
-        </div>
-      ) : null}
+      {selection && selection.kind !== 'waypoint' && <>
+        <div className="inspector-divider" />
+        <div className="inspector-heading"><span>Hard constraint</span><strong>이 객체가 대상인 규칙</strong></div>
+        {objectRules.length ? <ul className="inspector-rules">
+          {objectRules.map((rule) => <li key={rule.id}>
+            <button type="button" onClick={() => onFocusRule(rule.id)} title="규칙 패널에서 열기">
+              <span className={`type-badge ${rule.type}`}>{RULE_TYPE_TEXT[rule.type].name}</span>
+              <span>{describeRule(rule)}</span>
+              <small>{rule.id} · {RULE_STATUS_TEXT[rule.status]}</small>
+            </button>
+          </li>)}
+        </ul> : <p className="inspector-empty">이 객체를 대상으로 하는 규칙이 없습니다.</p>}
+        {(selection.kind === 'zone' || selection.kind === 'obstacle') && <button type="button" className="button-secondary" disabled={busy} onClick={() => onAddRule(selection.id)}>+ 이 객체에 규칙 추가</button>}
+      </>}
     </aside>
   )
 }

@@ -44,6 +44,7 @@ def _status_code(status: RouteStatus | ValidationStatus) -> int:
             RouteStatus.UNAPPROVED_RULE,
             RouteStatus.RULE_CONFLICT,
             RouteStatus.INVALID_ROUTE,
+            RouteStatus.WAYPOINT_BLOCKED,
         ):
             return 409
     elif status is ValidationStatus.INVALID_INPUT:

@@ -831,7 +831,7 @@ React Flow 그래프 엣지와 **공간탐색 그래프 엣지를 혼동하지 �
 
 > `ROADMAP.md` P07만 구현. React Konva를 사용해 실제 월드좌표(m)와 분리된 2D Plan Editor를 작성해. 벽/금지구역/Port 선택·이동·크기변경·층선택·줌/팬·Undo/Redo·속성창·경로 표시가 필요해. Konva `stage.toJSON()`을 도메인 데이터 원본으로 사용하지 마. 프런트 빌드와 수동 시연 절차를 제공해.
 
-### [ ] P08. 3D Viewer + 2D/3D 동기화
+### [x] P08. 3D Viewer + 2D/3D 동기화
 
 **목표**: 동일 Engineering JSON 기반 3D 건물·배관 결과 시각화.
 
@@ -848,6 +848,17 @@ React Flow 그래프 엣지와 **공간탐색 그래프 엣지를 혼동하지 �
 **복사 프롬프트**:
 
 > `ROADMAP.md` P08만 구현. React Three Fiber로 Engineering JSON을 렌더링하는 3D Viewer를 추가해. 좌표계 축 변환을 한 함수에 격리하고 2D/3D 동일 객체 ID 선택 연동, 배관 Line/Tube, 투명 Zone, OrbitControls, 카메라 리셋을 구현해. 도메인 데이터를 3D Mesh에서 역추출해 저장하지 마.
+
+### [x] P08b. 시작/끝점 구분 + 필수 경유점 시퀀스 (사용자 요청 추가 항목)
+
+**목표**: 배관마다 `시작 Port → 경유점 1 → … → n → 끝 Port` 순서를 지정해, 계획된 벽·바닥 관통부(슬리브)처럼
+반드시 지나야 하는 지점을 경로에 강제한다.
+
+- `Pipe.waypoints`(선택, 순서 있음): `id`, `position_m`, 선택 `pass_axis`(x/y/z: 그 축으로 곧게 통과), 선택 `note`(근거 메모).
+- A* 상태에 "방문한 경유점 수"를 넣어 순서 전체에서 최적인 경로를 한 번에 탐색. 막힌 경유점은 `WAYPOINT_BLOCKED`.
+- 독립 Validator가 연속 경로에서 순서·통과 방향을 다시 검사(`WAYPOINT_MISSED`, `WAYPOINT_DIRECTION`).
+- 2D/3D에서 시작점·끝점·경유점을 색과 라벨(S/E/번호)로 구분, 경로 순서 칩에서 선택·순서 변경·삭제.
+- 관통부를 별도 객체로 두고 여러 배관이 공유하는 방식, "승인된 개구부로만 벽 통과"(P09B `ALLOWED_PASSAGE`)는 추후 검토.
 
 ### [ ] P09. 후속 제약조건·멀티 라우팅·내보내기
 

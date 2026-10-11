@@ -64,6 +64,24 @@ class Equipment(ContractModel):
     ports: list[Port] = Field(min_length=1)
 
 
+class Waypoint(ContractModel):
+    """A point the pipe centreline must pass through, in sequence order.
+
+    Typical use: a planned wall/slab penetration (sleeve) located from civil
+    drawings or a rebar scan. ``pass_axis`` forces the route to run straight
+    through the point along that world axis (no bend at the waypoint).
+    """
+
+    id: Identifier
+    position_m: Point3
+    pass_axis: Literal["x", "y", "z"] | None = None
+    note: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Free-text provenance, e.g. drawing or scan reference.",
+    )
+
+
 class Pipe(ContractModel):
     id: Identifier
     from_port_id: Identifier
@@ -80,6 +98,12 @@ class Pipe(ContractModel):
         ),
     )
     train_id: Identifier | None = None
+    waypoints: list[Waypoint] = Field(
+        default_factory=list,
+        description=(
+            "Ordered mandatory via points between from_port_id and to_port_id."
+        ),
+    )
 
     @model_validator(mode="after")
     def check_endpoints(self) -> "Pipe":
@@ -174,6 +198,13 @@ class EngineeringProject(ContractModel):
                 raise ValueError(
                     f"pipe {pipe.id} to_port_id {pipe.to_port_id} is unknown"
                 )
+            for waypoint in pipe.waypoints:
+                register(waypoint.id, "waypoint")
+                if not bounds.contains(waypoint.position_m):
+                    raise ValueError(
+                        f"waypoint {waypoint.id} of pipe {pipe.id} lies outside "
+                        "building bounds_m"
+                    )
 
         for rule in self.constraints:
             register(rule.id, "constraint")

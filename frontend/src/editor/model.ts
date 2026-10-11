@@ -1,8 +1,8 @@
-import type { Aabb, Constraint, EngineeringProject, Pipe, Point3, Port } from '../api/client'
+import type { Aabb, Constraint, EngineeringProject, Pipe, Point3, Port, Waypoint } from '../api/client'
 import { snapMeters } from './coordinates.ts'
 
 export type BoxKind = 'obstacle' | 'zone'
-export type Selection = { kind: BoxKind | 'port'; id: string }
+export type Selection = { kind: BoxKind | 'port' | 'waypoint'; id: string }
 export type Corner = 'nw' | 'ne' | 'sw' | 'se'
 export type Floor = EngineeringProject['building']['floors'][number]
 
@@ -123,7 +123,7 @@ function nextId(project: EngineeringProject, prefix: string): string {
     ...project.obstacles.map((item) => item.id),
     ...project.zones.map((item) => item.id),
     ...project.equipment.flatMap((item) => [item.id, ...item.ports.map((port) => port.id)]),
-    ...project.pipes.map((item) => item.id),
+    ...project.pipes.flatMap((item) => [item.id, ...(item.waypoints ?? []).map((waypoint) => waypoint.id)]),
     ...project.constraints.map((item) => item.id),
   ])
   let number = 1
@@ -185,6 +185,7 @@ export function defaultPortHeight(project: EngineeringProject, floor: Floor): nu
 }
 
 export function deleteObject(project: EngineeringProject, selection: Selection): EngineeringProject {
+  if (selection.kind === 'waypoint') return removeWaypoint(project, selection.id)
   if (selection.kind === 'port') {
     const owner = project.equipment.find((item) => item.ports.some((port) => port.id === selection.id))
     if (!owner) throw new Error(`Port ${selection.id}가 없습니다.`)
@@ -322,21 +323,76 @@ export function createPort(
 export type RuleEdit = {
   type: Constraint['type']
   status: Constraint['status']
-  targetId: string
+  pipeIds: string[]
+  targetIds: string[]
   distanceText: string
+}
+
+export const RULE_TYPE_TEXT: Record<Constraint['type'], { name: string; meaning: string }> = {
+  KEEP_OUT: {
+    name: '진입 금지',
+    meaning: '배관(보온재·마진 포함 외곽)이 대상 Zone 안에 들어가거나 경계에 닿으면 안 됩니다. Zone만 대상으로 할 수 있습니다.',
+  },
+  MIN_CLEARANCE: {
+    name: '최소 이격',
+    meaning: '배관 외곽 표면과 대상(Zone 또는 장애물) 표면 사이가 지정 거리 이상 떨어져야 합니다.',
+  },
+}
+
+export const RULE_STATUS_TEXT: Record<Constraint['status'], string> = {
+  draft: '초안', needs_review: '검토 대기', approved: '승인', rejected: '거부',
+}
+
+/** Allowed target IDs for a rule type: KEEP_OUT takes zones, MIN_CLEARANCE zones or obstacles. */
+export function ruleTargetOptions(project: EngineeringProject, type: Constraint['type']): string[] {
+  return (type === 'KEEP_OUT' ? project.zones : [...project.zones, ...project.obstacles]).map((item) => item.id)
+}
+
+/** One plain-language sentence for a rule, e.g. for lists and tooltips. */
+export function describeRule(rule: Constraint): string {
+  const pipes = rule.scope.pipe_ids.join(', ')
+  const targets = rule.scope.target_ids.join(', ')
+  return rule.type === 'KEEP_OUT'
+    ? `${pipes} 배관은 ${targets} 안으로 들어갈 수 없습니다.`
+    : `${pipes} 배관 외곽은 ${targets} 표면에서 ${rule.parameters.distance_m ?? '?'} m 이상 떨어져야 합니다.`
+}
+
+/** How a rule bears on one pipe: applied together with the others, blocking the run, or not related. */
+export function ruleEffect(rule: Constraint, pipeId: string): 'applied' | 'blocking' | 'ignored' | 'other-pipe' {
+  if (!rule.scope.pipe_ids.includes(pipeId)) return 'other-pipe'
+  if (rule.status === 'approved') return 'applied'
+  // The backend refuses to route a pipe while any of its rules is unapproved; rejected rules still count.
+  return 'blocking'
+}
+
+function checkRuleScope(project: EngineeringProject, type: Constraint['type'], pipeIds: string[], targetIds: string[], distanceText: string): number | null {
+  const pipes = new Set(project.pipes.map((pipe) => pipe.id))
+  if (!pipeIds.length) throw new Error('규칙을 적용할 배관을 하나 이상 고르세요.')
+  if (pipeIds.some((id) => !pipes.has(id))) throw new Error('존재하지 않는 배관이 포함되어 있습니다.')
+  if (!targetIds.length) throw new Error('규칙 대상을 하나 이상 고르세요.')
+  const allowed = new Set(ruleTargetOptions(project, type))
+  const invalid = targetIds.filter((id) => !allowed.has(id))
+  if (invalid.length) {
+    throw new Error(type === 'KEEP_OUT'
+      ? `진입 금지 규칙의 대상은 Zone이어야 합니다: ${invalid.join(', ')}`
+      : `선택한 규칙 대상이 존재하지 않습니다: ${invalid.join(', ')}`)
+  }
+  if (new Set(pipeIds).size !== pipeIds.length || new Set(targetIds).size !== targetIds.length) {
+    throw new Error('같은 배관이나 대상을 두 번 넣을 수 없습니다.')
+  }
+  if (type === 'KEEP_OUT') return null
+  const distance = Number(distanceText)
+  if (!distanceText.trim() || !Number.isFinite(distance) || distance < 0) {
+    throw new Error('최소 이격 규칙에는 0 이상의 거리(m)를 입력해야 합니다.')
+  }
+  return distance
 }
 
 export function updateRule(project: EngineeringProject, ruleId: string, edit: RuleEdit): EngineeringProject {
   const rule = project.constraints.find((item) => item.id === ruleId)
   if (!rule) throw new Error(`규칙 ${ruleId}가 없습니다.`)
-  if (rule.scope.target_ids.length !== 1) throw new Error('대상이 여러 개인 규칙은 JSON에서 수정해 주세요.')
-  const targets = edit.type === 'KEEP_OUT' ? project.zones : [...project.zones, ...project.obstacles]
-  if (!targets.some((item) => item.id === edit.targetId)) throw new Error('선택한 규칙 대상이 존재하지 않습니다.')
   if (!['draft', 'needs_review', 'approved', 'rejected'].includes(edit.status)) throw new Error('승인 상태가 올바르지 않습니다.')
-  const distance = Number(edit.distanceText)
-  if (edit.type === 'MIN_CLEARANCE' && (!edit.distanceText.trim() || !Number.isFinite(distance) || distance < 0)) {
-    throw new Error('최소 이격 규칙에는 0 이상의 거리(m)를 입력해야 합니다.')
-  }
+  const distance = checkRuleScope(project, edit.type, edit.pipeIds, edit.targetIds, edit.distanceText)
   if (!rule.source.document_id || !rule.source.document_revision || !rule.source.clause_id || !rule.source.evidence_text) {
     throw new Error('규칙 출처와 근거가 필요합니다.')
   }
@@ -344,8 +400,8 @@ export function updateRule(project: EngineeringProject, ruleId: string, edit: Ru
     ...rule,
     type: edit.type,
     status: edit.status,
-    scope: { ...rule.scope, target_ids: [edit.targetId] },
-    parameters: edit.type === 'KEEP_OUT' ? {} : {
+    scope: { pipe_ids: [...edit.pipeIds], target_ids: [...edit.targetIds] },
+    parameters: distance === null ? {} : {
       distance_m: distance,
       distance_basis: 'insulated_pipe_surface_to_target_surface',
     },
@@ -355,9 +411,14 @@ export function updateRule(project: EngineeringProject, ruleId: string, edit: Ru
   return { ...project, constraints: project.constraints.map((item) => item.id === ruleId ? changed : item) }
 }
 
+export function deleteRule(project: EngineeringProject, ruleId: string): EngineeringProject {
+  if (!project.constraints.some((item) => item.id === ruleId)) throw new Error(`규칙 ${ruleId}가 없습니다.`)
+  return { ...project, constraints: project.constraints.filter((item) => item.id !== ruleId) }
+}
+
 export type NewRule = {
-  pipeId: string
-  targetId: string
+  pipeIds: string[]
+  targetIds: string[]
   type: Constraint['type']
   distanceText: string
   documentId: string
@@ -366,10 +427,46 @@ export type NewRule = {
   evidence: string
 }
 
+export const SYNTHETIC_SOURCE_DOCUMENT = 'SYNTH-ASSUMPTION'
+
+/**
+ * Default provenance for a study assumption: a fixed synthetic document, the next free clause number
+ * (A-1, A-2, ...) within it, and evidence text restating the rule. It is still provenance, not a code value.
+ */
+export function defaultRuleSource(project: EngineeringProject, rule: Pick<NewRule, 'type' | 'pipeIds' | 'targetIds' | 'distanceText'>) {
+  const used = new Set(project.constraints
+    .filter((item) => item.source.document_id === SYNTHETIC_SOURCE_DOCUMENT)
+    .map((item) => item.source.clause_id))
+  let number = 1
+  while (used.has(`A-${number}`)) number++
+  const pipes = rule.pipeIds.join(', ') || '(배관 미선택)'
+  const targets = rule.targetIds.join(', ') || '(대상 미선택)'
+  const statement = rule.type === 'KEEP_OUT'
+    ? `${pipes} 배관은 ${targets} 안으로 들어가지 않는다.`
+    : `${pipes} 배관 외곽은 ${targets} 표면에서 ${rule.distanceText.trim() || '?'} m 이상 떨어진다.`
+  return {
+    documentId: SYNTHETIC_SOURCE_DOCUMENT,
+    revision: '1',
+    clauseId: `A-${number}`,
+    evidence: `연구용 가정(실제 법규·설계기준 값 아님): ${statement}`,
+  }
+}
+
+/** Required inputs still empty in the new-rule form, in reading order. */
+export function missingForNewRule(rule: NewRule): string[] {
+  return [
+    !rule.pipeIds.length && '적용 배관',
+    !rule.targetIds.length && '대상',
+    rule.type === 'MIN_CLEARANCE' && !rule.distanceText.trim() && '최소 거리',
+    !rule.documentId.trim() && '문서 ID',
+    !rule.revision.trim() && '개정판',
+    !rule.clauseId.trim() && '조항 ID',
+    !rule.evidence.trim() && '근거 문구',
+  ].filter((item): item is string => Boolean(item))
+}
+
 export function createRule(project: EngineeringProject, input: NewRule): { project: EngineeringProject; id: string } {
-  if (!project.pipes.some((pipe) => pipe.id === input.pipeId)) throw new Error('규칙 대상 배관이 없습니다.')
-  const targets = input.type === 'KEEP_OUT' ? project.zones : [...project.zones, ...project.obstacles]
-  if (!targets.some((item) => item.id === input.targetId)) throw new Error('규칙 대상 형상이 없습니다.')
+  const distance = checkRuleScope(project, input.type, input.pipeIds, input.targetIds, input.distanceText)
   if (![input.documentId, input.revision, input.clauseId, input.evidence].every((text) => text.trim())) {
     throw new Error('규칙 출처·개정판·조항·근거 문구를 모두 입력해 주세요.')
   }
@@ -377,17 +474,13 @@ export function createRule(project: EngineeringProject, input: NewRule): { proje
   if (!identifier.test(input.documentId.trim()) || !identifier.test(input.clauseId.trim())) {
     throw new Error('문서 ID와 조항 ID는 영문자로 시작하고 영문자·숫자·밑줄·하이픈만 허용합니다.')
   }
-  const distance = Number(input.distanceText)
-  if (input.type === 'MIN_CLEARANCE' && (!input.distanceText.trim() || !Number.isFinite(distance) || distance < 0)) {
-    throw new Error('최소 이격거리(m)는 0 이상의 값이어야 합니다.')
-  }
   const id = nextId(project, 'RULE')
   const rule: Constraint = {
     id,
     type: input.type,
     severity: 'hard',
-    scope: { pipe_ids: [input.pipeId], target_ids: [input.targetId] },
-    parameters: input.type === 'KEEP_OUT' ? {} : {
+    scope: { pipe_ids: [...input.pipeIds], target_ids: [...input.targetIds] },
+    parameters: distance === null ? {} : {
       distance_m: distance,
       distance_basis: 'insulated_pipe_surface_to_target_surface',
     },
@@ -426,6 +519,158 @@ export function routeSegmentsOnFloor(points: Point3[], floor: Floor): Array<{ in
       from[2] + deltaZ * t,
     ]
     output.push({ index, from: interpolate(low), to: interpolate(high) })
+  }
+  return output
+}
+
+/** Floors on which a selected object is drawn in the plan (z range intersects the storey). */
+export function floorsShowing(project: EngineeringProject, selection: Selection): string[] {
+  const floors = project.building.floors
+  if (selection.kind === 'port' || selection.kind === 'waypoint') {
+    const point = selection.kind === 'port'
+      ? project.equipment.flatMap((item) => item.ports).find((item) => item.id === selection.id)?.position_m
+      : findWaypoint(project, selection.id)?.waypoint.position_m
+    if (!point) return []
+    const z = point[2]
+    return floors.filter((floor) => z >= floor.z_min_m && z <= floor.z_max_m).map((floor) => floor.id)
+  }
+  const shape = (selection.kind === 'obstacle' ? project.obstacles : project.zones).find((item) => item.id === selection.id)?.shape
+  if (!shape) return []
+  return floors.filter((floor) => shape.max_m[2] > floor.z_min_m && shape.min_m[2] < floor.z_max_m).map((floor) => floor.id)
+}
+
+/** Role of a port for one pipe: where the route starts or ends. */
+export function portRole(project: EngineeringProject, pipeId: string, portId: string): 'start' | 'end' | null {
+  const pipe = project.pipes.find((item) => item.id === pipeId)
+  if (!pipe) return null
+  return pipe.from_port_id === portId ? 'start' : pipe.to_port_id === portId ? 'end' : null
+}
+
+export function findWaypoint(project: EngineeringProject, id: string): { pipe: Pipe; waypoint: Waypoint; index: number } | null {
+  for (const pipe of project.pipes) {
+    const index = (pipe.waypoints ?? []).findIndex((item) => item.id === id)
+    if (index >= 0) return { pipe, waypoint: pipe.waypoints![index], index }
+  }
+  return null
+}
+
+function withWaypoints(project: EngineeringProject, pipeId: string, waypoints: Waypoint[]): EngineeringProject {
+  return { ...project, pipes: project.pipes.map((pipe) => pipe.id === pipeId ? { ...pipe, waypoints } : pipe) }
+}
+
+/**
+ * Snap to a routing cell centre. The backend grid starts at building.bounds_m.min_m, so centres sit at
+ * min + (i + 0.5) x resolution; a waypoint on a centre is matched exactly by the search.
+ */
+export function snapToCellCentre(project: EngineeringProject, point: Point3): Point3 {
+  const step = project.routing_config.grid_resolution_m
+  const bounds = project.building.bounds_m
+  return point.map((value, axis) => {
+    const low = bounds.min_m[axis] + step / 2
+    const cells = Math.max(1, Math.ceil((bounds.max_m[axis] - bounds.min_m[axis]) / step - 1e-9))
+    const snapped = snapMeters(value, step, low)
+    return Math.min(Math.max(snapped, low), Number((low + (cells - 1) * step).toFixed(9)))
+  }) as Point3
+}
+
+/** Adds a waypoint at the end of the pipe's sequence (just before the end port). */
+export function addWaypoint(
+  project: EngineeringProject, pipeId: string, at: Point3, floor: Floor, snap: boolean,
+): { project: EngineeringProject; selection: Selection } {
+  const pipe = project.pipes.find((item) => item.id === pipeId)
+  if (!pipe) throw new Error('경유점을 추가할 배관을 먼저 선택해 주세요.')
+  const existing = pipe.waypoints ?? []
+  const onFloor = [...existing].reverse().find((item) => item.position_m[2] >= floor.z_min_m && item.position_m[2] <= floor.z_max_m)
+  const raw: Point3 = [at[0], at[1], onFloor ? onFloor.position_m[2] : defaultPortHeight(project, floor)]
+  const position = snap ? snapToCellCentre(project, raw) : raw
+  checkPoint(project, position)
+  const id = nextId(project, 'WP')
+  return {
+    project: withWaypoints(project, pipeId, [...existing, { id, position_m: position }]),
+    selection: { kind: 'waypoint', id },
+  }
+}
+
+export type WaypointEdit = { position?: Point3; passAxis?: Waypoint['pass_axis']; note?: string }
+
+export function updateWaypoint(project: EngineeringProject, id: string, edit: WaypointEdit): EngineeringProject {
+  const found = findWaypoint(project, id)
+  if (!found) throw new Error(`경유점 ${id}가 없습니다.`)
+  const next: Waypoint = { ...found.waypoint }
+  if (edit.position) {
+    checkPoint(project, edit.position)
+    next.position_m = edit.position
+  }
+  if (edit.passAxis !== undefined) {
+    if (edit.passAxis) next.pass_axis = edit.passAxis
+    else delete next.pass_axis
+  }
+  if (edit.note !== undefined) {
+    const note = edit.note.trim()
+    if (note.length > 500) throw new Error('메모는 500자 이하로 입력해 주세요.')
+    if (note) next.note = note
+    else delete next.note
+  }
+  const waypoints = [...found.pipe.waypoints!]
+  waypoints[found.index] = next
+  return withWaypoints(project, found.pipe.id, waypoints)
+}
+
+/** Moves a waypoint one place earlier (-1) or later (+1) in its pipe's sequence. */
+export function reorderWaypoint(project: EngineeringProject, id: string, delta: -1 | 1): EngineeringProject {
+  const found = findWaypoint(project, id)
+  if (!found) throw new Error(`경유점 ${id}가 없습니다.`)
+  const target = found.index + delta
+  const waypoints = [...found.pipe.waypoints!]
+  if (target < 0 || target >= waypoints.length) return project
+  ;[waypoints[found.index], waypoints[target]] = [waypoints[target], waypoints[found.index]]
+  return withWaypoints(project, found.pipe.id, waypoints)
+}
+
+export function removeWaypoint(project: EngineeringProject, id: string): EngineeringProject {
+  const found = findWaypoint(project, id)
+  if (!found) throw new Error(`경유점 ${id}가 없습니다.`)
+  const waypoints = found.pipe.waypoints!.filter((item) => item.id !== id)
+  if (waypoints.length) return withWaypoints(project, found.pipe.id, waypoints)
+  // Drop the empty list so a pipe without waypoints serialises exactly as before.
+  return {
+    ...project,
+    pipes: project.pipes.map((pipe) => {
+      if (pipe.id !== found.pipe.id) return pipe
+      const rest = { ...pipe }
+      delete rest.waypoints
+      return rest
+    }),
+  }
+}
+
+export type FloorCrossing = { at: Point3; direction: 'up' | 'down'; floorId: string }
+
+/**
+ * Where the route leaves this floor's z range through its ceiling or floor plane, and the adjacent storey it
+ * continues into. Used to mark storey transitions on a single-floor plan.
+ */
+export function routeFloorCrossings(points: Point3[], floor: Floor, floors: Floor[]): FloorCrossing[] {
+  const output: FloorCrossing[] = []
+  const seen = new Set<string>()
+  for (let index = 0; index < points.length - 1; index++) {
+    const from = points[index]
+    const to = points[index + 1]
+    const low = Math.min(from[2], to[2])
+    const high = Math.max(from[2], to[2])
+    if (high === low) continue
+    for (const [plane, direction] of [[floor.z_max_m, 'up'], [floor.z_min_m, 'down']] as const) {
+      const leaves = direction === 'up' ? high > plane && low < plane + 1e-9 : low < plane && high > plane - 1e-9
+      if (!leaves || low > floor.z_max_m || high < floor.z_min_m) continue
+      const t = (plane - from[2]) / (to[2] - from[2])
+      const at: Point3 = [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, plane]
+      const beyond = direction === 'up' ? plane + 1e-6 : plane - 1e-6
+      const next = floors.find((item) => item.id !== floor.id && beyond >= item.z_min_m && beyond <= item.z_max_m)
+      const key = `${at[0].toFixed(6)}:${at[1].toFixed(6)}:${direction}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      output.push({ at, direction, floorId: next?.id ?? (direction === 'up' ? '위층' : '아래층') })
+    }
   }
   return output
 }

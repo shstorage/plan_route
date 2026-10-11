@@ -1,0 +1,12 @@
+.viewer3d { margin: 0 0 22px; padding: 26px; }
+.viewer-toolbar { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; margin: 22px 0 12px; color: #637c8a; font-size: 11px; }
+.viewer-toolbar label { display: flex; align-items: center; gap: 7px; }
+.viewer-toolbar input { margin: 0; accent-color: #0a789a; }
+.viewer-toolbar select { max-width: 320px; height: 33px; padding: 0 9px; border: 1px solid #d2dfe6; border-radius: 7px; background: #fff; color: #314b5c; font-size: 11px; }
+.viewer-canvas { position: relative; width: 100%; height: 520px; overflow: hidden; border: 1px solid #cddde6; border-radius: 11px; background: #eef4f7; }
+.viewer-fallback { display: grid; place-items: center; height: 100%; padding: 20px; color: #7d91a0; font-size: 13px; text-align: center; }
+.viewer-rule { margin: 0 0 8px; padding: 8px 11px; border: 1px solid #ecc3d6; border-radius: 7px; background: #fdf3f8; color: #8a2d5b; font-size: 11px; }
+.legend-slab { background: #a9bac533; border: 1px dashed #8aa0ae; }
+.legend-keepout { background: #e8826b99; }
+.legend-selected { background: #0a8fb2; }
+.legend-target { background: #c2337a; }

@@ -69,6 +69,14 @@ export interface EngineeringProject {
   routing_config: { grid_resolution_m: number }
 }
 
+export interface Waypoint {
+  id: string
+  position_m: Point3
+  /** Route must run straight through the point along this world axis. */
+  pass_axis?: 'x' | 'y' | 'z' | null
+  note?: string | null
+}
+
 export interface Pipe {
   id: string
   from_port_id: string
@@ -78,6 +86,8 @@ export interface Pipe {
   /** Optional in stored JSON; the backend treats a missing value as 0. */
   clearance_margin_m?: number
   train_id?: string | null
+  /** Ordered mandatory via points between the start and end ports. */
+  waypoints?: Waypoint[]
 }
 
 export interface HealthResponse {
@@ -124,6 +134,7 @@ export interface RouteSolveReport {
     | 'RULE_CONFLICT'
     | 'INVALID_ROUTE'
     | 'RULES_NOT_COMPILED'
+    | 'WAYPOINT_BLOCKED'
   project_id: string
   pipe_id: string
   algorithm: string

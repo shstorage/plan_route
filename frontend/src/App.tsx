@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import {
   API_BASE_URL,
   ApiError,
@@ -15,8 +15,12 @@ import {
   type ValidationIssue,
 } from './api/client'
 import { PlanEditor } from './editor/PlanEditor'
+import type { Selection } from './editor/model.ts'
 import { pushHistory, redoHistory, undoHistory, type History } from './editor/history.ts'
 import './App.css'
+
+// three.js is loaded only when the 3D view is first rendered, keeping it out of the main bundle.
+const Viewer3D = lazy(() => import('./viewer/Viewer3D'))
 
 type ConnectionState =
   | { status: 'loading' }
@@ -51,6 +55,7 @@ const statusText: Record<RouteSolveReport['status'], string> = {
   RULE_CONFLICT: '규칙과 포트 충돌',
   INVALID_ROUTE: '최종 기하 검증 실패',
   RULES_NOT_COMPILED: '규칙 컴파일 필요',
+  WAYPOINT_BLOCKED: '경유점이 막힘',
 }
 
 const statusHelp: Record<RouteSolveReport['status'], string> = {
@@ -62,6 +67,29 @@ const statusHelp: Record<RouteSolveReport['status'], string> = {
   RULE_CONFLICT: '승인 규칙이 연결 포트를 막아 경로를 시작하거나 끝낼 수 없습니다.',
   INVALID_ROUTE: '탐색 경로가 원본 연속 형상 검증을 통과하지 못했습니다.',
   RULES_NOT_COMPILED: '승인 규칙을 먼저 컴파일해야 합니다.',
+  WAYPOINT_BLOCKED: '경유점이 장애물·건물 경계·승인 규칙 영역 안에 있습니다. 경유점 위치를 옮겨 주세요.',
+}
+
+const violationText: Record<string, string> = {
+  OBSTACLE_COLLISION: '장애물 충돌',
+  BUILDING_BOUNDARY: '건물 경계',
+  ENDPOINT_MISMATCH: '끝점 불일치',
+  KEEP_OUT: '진입 금지',
+  MIN_CLEARANCE: '최소 이격',
+  WAYPOINT_MISSED: '경유점 누락',
+  WAYPOINT_DIRECTION: '경유점 통과 방향',
+  SELF_CLEARANCE: '자기 간섭(배관끼리 겹침)',
+}
+
+/** Korean notes for solver messages that accompany a usable result. */
+function routeNote(message: string): string | null {
+  if (message.includes('re-searched one at a time')) {
+    return '경유점 구간끼리 겹쳐서, 앞 구간을 피하도록 구간별로 다시 탐색했습니다. 순서 전체의 최적 경로라는 보장은 없습니다.'
+  }
+  if (message.includes('leg-by-leg re-search failed')) {
+    return '경유점 구간끼리 겹치며, 구간별 재탐색으로도 피하지 못했습니다. 경유점이나 포트 위치를 조정해 주세요.'
+  }
+  return null
 }
 
 function overviewFromText(text: string): ProjectOverview | null {
@@ -111,6 +139,8 @@ function App() {
   const [projectLabel, setProjectLabel] = useState('예제 불러오는 중')
   const [example, setExample] = useState<ExampleProject>('starter')
   const [selectedPipeId, setSelectedPipeId] = useState('')
+  const [selection, setSelection] = useState<Selection | null>(null)
+  const [focusRuleId, setFocusRuleId] = useState('')
   const [lookupId, setLookupId] = useState('')
   const [savedMeta, setSavedMeta] = useState<{ revision: number; updatedAt: string } | null>(null)
   const [validatedId, setValidatedId] = useState<string | null>(null)
@@ -175,6 +205,7 @@ function App() {
     setEditorProject(project)
     setPast([])
     setFuture([])
+    setSelection(null)
     setProjectLabel(label)
     setSelectedPipeId(project.pipes[0]?.id ?? '')
     setLookupId(project.project_id)
@@ -251,14 +282,14 @@ function App() {
       <main className="content">
         <section className="intro">
           <div>
-            <p className="eyebrow">SYNTHETIC ROUTE STUDY · P07</p>
+            <p className="eyebrow">SYNTHETIC ROUTE STUDY · P08</p>
             <h1>도면에서 배치하고<br /><span>경로를 확인하세요.</span></h1>
             <p className="lead">층별 2D 도면에서 합성 건물의 벽체·Zone·Port를 편집하고, 승인 규칙을 적용한 경로를 계산합니다.</p>
           </div>
           <div className="intro-aside">
             <div className="aside-icon">3D</div>
             <strong>세계좌표 기반 2D 편집기</strong>
-            <span>도면 조작은 EngineeringProject JSON의 m 좌표로 저장됩니다. 3D 보기는 후속 단계에서 추가됩니다.</span>
+            <span>도면 조작은 EngineeringProject JSON의 m 좌표로 저장되고, 3D 보기는 같은 JSON에서 다시 그려집니다.</span>
           </div>
         </section>
 
@@ -279,6 +310,10 @@ function App() {
             project={editorProject}
             route={route?.pipe_id === selectedPipeId ? route : null}
             selectedPipeId={selectedPipeId}
+            selection={selection}
+            onSelectionChange={setSelection}
+            focusRuleId={focusRuleId}
+            onFocusRule={setFocusRuleId}
             busy={operation !== null}
             canUndo={past.length > 0}
             canRedo={future.length > 0}
@@ -288,6 +323,20 @@ function App() {
             onSelectPipe={(pipeId) => { setSelectedPipeId(pipeId); setRoute(null) }}
           />
         ) : <section className="panel editor-placeholder"><p className="step">02 / PLAN EDITOR</p><h2>도면 준비 중</h2><p>예제를 불러오거나 수정한 JSON을 검증하면 층별 배치도가 나타납니다.</p></section>}
+
+        {editorProject && (
+          <Suspense fallback={<section className="panel viewer3d"><div className="viewer-loading">3D 보기 불러오는 중…</div></section>}>
+            <Viewer3D
+              project={editorProject}
+              route={route?.pipe_id === selectedPipeId ? route : null}
+              selectedPipeId={selectedPipeId}
+              selection={selection}
+              onSelect={setSelection}
+              focusRuleId={focusRuleId}
+              onFocusRule={setFocusRuleId}
+            />
+          </Suspense>
+        )}
 
         <section className="workspace" aria-label="프로젝트 작업대">
           <div className="left-column">
@@ -372,7 +421,7 @@ function App() {
 
           <div className="right-column">
             <section className="panel run-panel">
-              <div className="panel-heading"><div><p className="step">03 / ROUTE</p><h2>경로 탐색</h2></div><span className="soft-badge">3D A* + 독립 검증</span></div>
+              <div className="panel-heading"><div><p className="step">04 / ROUTE</p><h2>경로 탐색</h2></div><span className="soft-badge">3D A* + 독립 검증</span></div>
               <p className="panel-description">선택한 배관에 승인된 규칙을 적용하고 경로를 계산합니다.</p>
               <div className="run-controls">
                 <label htmlFor="pipe-id">배관 ID</label>
@@ -395,7 +444,7 @@ function App() {
             )}
 
             <section className="panel result-panel" aria-live="polite">
-              <div className="panel-heading"><div><p className="step">04 / RESULT</p><h2>계산 결과</h2></div>{route && <span className={`result-chip ${route.status === 'SUCCESS' ? 'good' : 'bad'}`}>{route.status}</span>}</div>
+              <div className="panel-heading"><div><p className="step">05 / RESULT</p><h2>계산 결과</h2></div>{route && <span className={`result-chip ${route.status === 'SUCCESS' ? 'good' : 'bad'}`}>{route.status}</span>}</div>
               {!route ? (
                 <div className="empty-result">
                   <div className="empty-symbol">⌁</div>
@@ -407,6 +456,7 @@ function App() {
                   <div className={`result-message ${route.status === 'SUCCESS' ? 'good' : 'bad'}`}>
                     <strong>{statusText[route.status]}</strong>
                     <span>{statusHelp[route.status]}</span>
+                    {route.message && routeNote(route.message) && <small className="route-note">{routeNote(route.message)}</small>}
                     {route.message && <small>상세: {route.message}</small>}
                   </div>
                   <div className="metric-grid">
@@ -425,7 +475,7 @@ function App() {
                     <div className="table-block">
                       <h3>위반 내역</h3>
                       <div className="table-scroll"><table><thead><tr><th>구간</th><th>위반</th><th>대상 / 규칙</th><th>측정 / 요구 (m)</th></tr></thead><tbody>
-                        {route.validation.violations.map((violation, index) => <tr key={`${violation.segment_index}-${violation.object_id}-${index}`}><td>{violation.segment_index}</td><td>{violation.code}</td><td>{violation.object_id}{violation.rule_id && <small>{violation.rule_id}</small>}</td><td>{formatNumber(violation.measured_distance_m, 3)} / {formatNumber(violation.required_distance_m, 3)}</td></tr>)}
+                        {route.validation.violations.map((violation, index) => <tr key={`${violation.segment_index}-${violation.object_id}-${index}`}><td>{violation.segment_index}</td><td>{violationText[violation.code] ?? violation.code}<small>{violation.code}</small></td><td>{violation.object_id}{violation.rule_id && <small>{violation.rule_id}</small>}</td><td>{formatNumber(violation.measured_distance_m, 3)} / {formatNumber(violation.required_distance_m, 3)}</td></tr>)}
                       </tbody></table></div>
                     </div>
                   )}

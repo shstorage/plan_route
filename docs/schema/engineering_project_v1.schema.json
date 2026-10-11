@@ -411,6 +411,14 @@
           ],
           "default": null,
           "title": "Train Id"
+        },
+        "waypoints": {
+          "description": "Ordered mandatory via points between from_port_id and to_port_id.",
+          "items": {
+            "$ref": "#/$defs/Waypoint"
+          },
+          "title": "Waypoints",
+          "type": "array"
         }
       },
       "required": [
@@ -583,6 +591,72 @@
         "max_expansions"
       ],
       "title": "SearchLimits",
+      "type": "object"
+    },
+    "Waypoint": {
+      "additionalProperties": false,
+      "description": "A point the pipe centreline must pass through, in sequence order.\n\nTypical use: a planned wall/slab penetration (sleeve) located from civil\ndrawings or a rebar scan. ``pass_axis`` forces the route to run straight\nthrough the point along that world axis (no bend at the waypoint).",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Free-text provenance, e.g. drawing or scan reference.",
+          "title": "Note"
+        },
+        "pass_axis": {
+          "anyOf": [
+            {
+              "enum": [
+                "x",
+                "y",
+                "z"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pass Axis"
+        },
+        "position_m": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Position M",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "position_m"
+      ],
+      "title": "Waypoint",
       "type": "object"
     },
     "Zone": {

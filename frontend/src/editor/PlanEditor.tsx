@@ -1,19 +1,27 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import Konva from 'konva'
-import { Stage, Layer, Rect, Line, Circle, Text } from 'react-konva'
+import { Stage, Layer, Rect, Line, Circle, Text, RegularPolygon } from 'react-konva'
 import type { EngineeringProject, Point3, RouteSolveReport } from '../api/client'
 import { fitView, planToWorld, screenToWorld, snapMeters, worldBoxToPlan, worldToPlan, zoomAt, type PlanView } from './coordinates.ts'
-import { createPort, deleteObject, drawBox, moveBox, resizeBox, routeSegmentsOnFloor, updatePort, type BoxKind, type Corner, type Selection } from './model.ts'
+import { addWaypoint, createPort, deleteObject, drawBox, findWaypoint, floorsShowing, portRole, routeFloorCrossings, snapToCellCentre, updateWaypoint, moveBox, resizeBox, routeSegmentsOnFloor, updatePort, type BoxKind, type Corner, type Selection } from './model.ts'
 import { EditorInspector } from './EditorInspector'
 import { DomainSettings, PipeSettings } from './DomainPanel'
+import { RouteSequence } from './RouteSequence'
+import { RulesPanel } from './RulesPanel'
+import { ROLE_COLORS } from './roles.ts'
 import './PlanEditor.css'
 
-type Mode = 'select' | 'pan' | 'add-obstacle' | 'add-zone' | 'add-port'
+type Mode = 'select' | 'pan' | 'add-obstacle' | 'add-zone' | 'add-port' | 'add-waypoint'
 
 type Props = {
   project: EngineeringProject
   route: RouteSolveReport | null
   selectedPipeId: string
+  selection: Selection | null
+  onSelectionChange: (selection: Selection | null) => void
+  /** Rule open in the rules panel; its targets are highlighted here and in 3D. */
+  focusRuleId: string
+  onFocusRule: (ruleId: string) => void
   busy: boolean
   canUndo: boolean
   canRedo: boolean
@@ -29,7 +37,7 @@ const HEIGHT = 540
 const corners: Corner[] = ['nw', 'ne', 'sw', 'se']
 
 export function PlanEditor({
-  project, route, selectedPipeId, busy, canUndo, canRedo, onUndo, onRedo, onCommit, onSelectPipe,
+  project, route, selectedPipeId, selection, onSelectionChange: setSelection, focusRuleId, onFocusRule, busy, canUndo, canRedo, onUndo, onRedo, onCommit, onSelectPipe,
 }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
@@ -39,12 +47,20 @@ export function PlanEditor({
   const [snapEnabled, setSnapEnabled] = useState(true)
   const [floorId, setFloorId] = useState(project.building.floors[0]?.id ?? '')
   const [equipmentId, setEquipmentId] = useState(project.equipment[0]?.id ?? '')
-  const [selection, setSelection] = useState<Selection | null>(null)
   const [hovered, setHovered] = useState<Point3 | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [editorError, setEditorError] = useState<string | null>(null)
   const [openCards, setOpenCards] = useState({ domain: false, pipe: false })
+  const [newRuleRequest, setNewRuleRequest] = useState<{ targetId: string; nonce: number } | null>(null)
+  const focusTargets = new Set(project.constraints.find((rule) => rule.id === focusRuleId)?.scope.target_ids ?? [])
   const bounds = project.building.bounds_m
+  // A selection made in the 3D view may sit on another storey; show the first floor that draws it.
+  const [followedSelection, setFollowedSelection] = useState(selection)
+  if (followedSelection !== selection) {
+    setFollowedSelection(selection)
+    const showing = selection ? floorsShowing(project, selection) : []
+    if (showing.length && !showing.includes(floorId)) setFloorId(showing[0])
+  }
   const floor = project.building.floors.find((item) => item.id === floorId) ?? project.building.floors[0]
   const chosenEquipmentId = project.equipment.some((item) => item.id === equipmentId)
     ? equipmentId : project.equipment[0]?.id ?? ''
@@ -71,6 +87,8 @@ export function PlanEditor({
   const gridX = useMemo(() => Array.from({ length: Math.floor(spanX / gridStep) + 1 }, (_, index) => index * gridStep), [spanX, gridStep])
   const gridY = useMemo(() => Array.from({ length: Math.floor(spanY / gridStep) + 1 }, (_, index) => index * gridStep), [spanY, gridStep])
   const routeSegments = route && floor ? routeSegmentsOnFloor(route.points_m, floor) : []
+  const routeFloorIds = new Set(route ? project.building.floors.filter((item) => routeSegmentsOnFloor(route.points_m, item).length).map((item) => item.id) : [])
+  const crossings = route && floor ? routeFloorCrossings(route.points_m, floor, project.building.floors) : []
   const invalidSegments = new Set(route?.validation?.violations.map((item) => item.segment_index) ?? [])
   const anyPendingRule = project.constraints.some((item) => item.scope.pipe_ids.includes(selectedPipeId) && item.status !== 'approved')
 
@@ -143,6 +161,16 @@ export function PlanEditor({
   function clickSurface() {
     if (busy || !floor) return
     if (mode === 'select') { setSelection(null); return }
+    if (mode === 'add-waypoint') {
+      const at = pointerWorld()
+      if (!at) return
+      try {
+        const created = addWaypoint(project, selectedPipeId, at, floor, snapEnabled)
+        commit(created.project)
+        setSelection(created.selection)
+      } catch (error) { onError(error instanceof Error ? error.message : '경유점을 만들지 못했습니다.') }
+      return
+    }
     if (mode !== 'add-port') return
     const at = pointerWorld()
     if (!at) return
@@ -165,7 +193,8 @@ export function PlanEditor({
     // and clicks inside reach the objects (with fill disabled Konva hit-tests only the stroke).
     const slab = kind === 'obstacle' && 'kind' in item && item.kind === 'slab'
     const fill = slab ? undefined : kind === 'obstacle' ? '#7991a1' : restricted ? '#f4ad99a3' : '#f8d8929c'
-    const stroke = selected ? '#0a8fb2' : slab ? '#8aa0ae' : kind === 'obstacle' ? '#52697b' : restricted ? '#c2614b' : '#c08b3f'
+    const focused = focusTargets.has(item.id)
+    const stroke = selected ? '#0a8fb2' : focused ? '#c2337a' : slab ? '#8aa0ae' : kind === 'obstacle' ? '#52697b' : restricted ? '#c2614b' : '#c08b3f'
     const labelInside = rect.width * view.scale > 70 && rect.height * view.scale > 18
     const xMin = rect.x
     const xMax = rect.x + rect.width
@@ -174,7 +203,7 @@ export function PlanEditor({
     return <Fragment key={`${kind}-${item.id}`}>
       <Rect
         x={rect.x} y={rect.y} width={rect.width} height={rect.height}
-        fill={fill} stroke={stroke} strokeWidth={(selected ? 2.5 : 1.6) / view.scale}
+        fill={fill} stroke={stroke} strokeWidth={(selected || focused ? 3 : 1.6) / view.scale}
         dash={pending || slab ? [7 / view.scale, 4 / view.scale] : undefined}
         fillEnabled={!slab}
         listening={mode === 'select'}
@@ -205,6 +234,11 @@ export function PlanEditor({
     </Fragment>
   }
 
+  const sequencePipe = project.pipes.find((pipe) => pipe.id === selectedPipeId)
+  const visibleWaypoints = floor && sequencePipe
+    ? (sequencePipe.waypoints ?? []).map((waypoint, index) => ({ waypoint, index }))
+      .filter(({ waypoint }) => waypoint.position_m[2] >= floor.z_min_m && waypoint.position_m[2] <= floor.z_max_m)
+    : []
   const visiblePorts = floor ? project.equipment.flatMap((equipment) => equipment.ports.filter((port) => port.position_m[2] >= floor.z_min_m && port.position_m[2] <= floor.z_max_m)) : []
 
   return (
@@ -236,10 +270,25 @@ export function PlanEditor({
           open={openCards.pipe} onToggle={(pipe) => setOpenCards((cards) => ({ ...cards, pipe }))}
         />
       </div>
+      <RouteSequence
+        project={project} pipeId={selectedPipeId} selection={selection} busy={busy} adding={mode === 'add-waypoint'}
+        onSelect={setSelection} onAdd={() => setMode(mode === 'add-waypoint' ? 'select' : 'add-waypoint')}
+        onCommit={commit} onError={onError}
+      />
       <div className="plan-body">
         <div className="plan-canvas-column">
           {anyPendingRule && <div className="plan-warning" role="status">미승인 규칙이 있습니다. 해당 배관은 승인 전 경로 실행이 거부됩니다.</div>}
           <div className={`canvas-viewport mode-${mode}`} ref={viewportRef}>
+            {floor && <div className="floor-overlay" role="group" aria-label="표시 층">
+              {project.building.floors.map((item) => (
+                <button key={item.id} type="button" className={item.id === floor.id ? 'active' : ''} aria-pressed={item.id === floor.id}
+                  title={`${item.id} · z ${item.z_min_m}–${item.z_max_m} m${routeFloorIds.has(item.id) ? ' · 경로 있음' : ''}`}
+                  onClick={() => { setFloorId(item.id); setSelection(null) }}>
+                  {item.id}{item.id === floor.id && <small> {item.z_min_m}–{item.z_max_m}m</small>}
+                  {routeFloorIds.has(item.id) && <i className="floor-route-dot" aria-label="경로 있음" />}
+                </button>
+              ))}
+            </div>}
             {editorError && <div className="plan-error" role="alert"><span><strong>반영되지 않음</strong> {editorError}</span><button type="button" aria-label="오류 닫기" onClick={() => setEditorError(null)}>×</button></div>}
             <Stage ref={stageRef} width={width} height={HEIGHT} x={view.panX} y={view.panY} scaleX={view.scale} scaleY={view.scale}
               draggable={!busy && mode === 'pan'}
@@ -277,6 +326,16 @@ export function PlanEditor({
                     stroke={invalid ? '#df4047' : '#087fad'} strokeWidth={(invalid ? 5 : 3.5) / view.scale}
                     lineCap="round" lineJoin="round" listening={false} />
                 })}
+                {crossings.map((crossing) => {
+                  const point = worldToPlan(crossing.at, bounds)
+                  const label = `${crossing.direction === 'up' ? '↑' : '↓'} ${crossing.floorId}`
+                  return <Fragment key={`cross-${point.x}-${point.y}-${crossing.direction}`}>
+                    <Circle x={point.x} y={point.y} radius={7 / view.scale} fill="#087fad" stroke="#fff" strokeWidth={2 / view.scale} listening={false} />
+                    <Rect x={point.x + 9 / view.scale} y={point.y - 19 / view.scale} width={(label.length * 7 + 10) / view.scale} height={17 / view.scale}
+                      cornerRadius={8 / view.scale} fill="#087fad" listening={false} />
+                    <Text x={point.x + 14 / view.scale} y={point.y - 16 / view.scale} text={label} fontSize={11 / view.scale} fontStyle="bold" fill="#fff" listening={false} />
+                  </Fragment>
+                })}
                 {draft && (() => {
                   const a = worldToPlan(draft.start, bounds)
                   const b = worldToPlan(draft.end, bounds)
@@ -287,9 +346,12 @@ export function PlanEditor({
                 {visiblePorts.map((port) => {
                   const point = worldToPlan(port.position_m, bounds)
                   const selected = selection?.kind === 'port' && selection.id === port.id
+                  const role = portRole(project, selectedPipeId, port.id)
+                  const roleColor = role ? ROLE_COLORS[role] : null
                   return <Fragment key={port.id}>
-                    <Circle x={point.x} y={point.y} radius={(selected ? 8 : 6) / view.scale}
-                      fill="#fff" stroke={selected ? '#087fad' : '#105c77'} strokeWidth={2.5 / view.scale}
+                    {selected && roleColor && <Circle x={point.x} y={point.y} radius={13 / view.scale} stroke="#087fad" strokeWidth={2 / view.scale} listening={false} />}
+                    <Circle x={point.x} y={point.y} radius={(roleColor ? 9 : selected ? 8 : 6) / view.scale}
+                      fill={roleColor ?? '#fff'} stroke={selected ? '#087fad' : roleColor ? '#ffffff' : '#105c77'} strokeWidth={(roleColor ? 2 : 2.5) / view.scale}
                       listening={mode === 'select'}
                       draggable={!busy && mode === 'select'}
                       onClick={(event) => { event.cancelBubble = true; setSelection({ kind: 'port', id: port.id }) }}
@@ -306,8 +368,35 @@ export function PlanEditor({
                         tryCommit(() => updatePort(project, port.id, snapped))
                         node.position(point)
                       }} />
-                    <Text x={point.x + 9 / view.scale} y={point.y - 8 / view.scale} text={port.id}
-                      fontSize={11 / view.scale} fill="#194f67" listening={false} />
+                    {role && <Text x={point.x - 4 / view.scale} y={point.y - 5.5 / view.scale} text={role === 'start' ? 'S' : 'E'}
+                      fontSize={11 / view.scale} fontStyle="bold" fill="#fff" listening={false} />}
+                    <Text x={point.x + 11 / view.scale} y={point.y - 8 / view.scale} text={role ? `${port.id} (${role === 'start' ? '시작' : '끝'})` : port.id}
+                      fontSize={11 / view.scale} fontStyle={role ? 'bold' : 'normal'} fill={roleColor ?? '#194f67'} listening={false} />
+                  </Fragment>
+                })}
+                {visibleWaypoints.map(({ waypoint, index }) => {
+                  const point = worldToPlan(waypoint.position_m, bounds)
+                  const selected = selection?.kind === 'waypoint' && selection.id === waypoint.id
+                  const label = String(index + 1)
+                  return <Fragment key={waypoint.id}>
+                    <RegularPolygon x={point.x} y={point.y} sides={4} radius={(selected ? 13 : 11) / view.scale}
+                      fill={ROLE_COLORS.waypoint} stroke={selected ? '#087fad' : '#fff'} strokeWidth={(selected ? 3 : 2) / view.scale}
+                      listening={mode === 'select'}
+                      draggable={!busy && mode === 'select'}
+                      onClick={(event) => { event.cancelBubble = true; setSelection({ kind: 'waypoint', id: waypoint.id }) }}
+                      onTap={(event) => { event.cancelBubble = true; setSelection({ kind: 'waypoint', id: waypoint.id }) }}
+                      onDragEnd={(event) => {
+                        const node = event.target
+                        const moved = planToWorld({ x: node.x(), y: node.y() }, waypoint.position_m[2], bounds)
+                        const next = snapEnabled ? snapToCellCentre(project, moved) : moved
+                        tryCommit(() => updateWaypoint(project, waypoint.id, { position: [next[0], next[1], waypoint.position_m[2]] }))
+                        node.position(point)
+                      }} />
+                    <Text x={point.x - (label.length * 3.3) / view.scale} y={point.y - 5.5 / view.scale} text={label}
+                      fontSize={11 / view.scale} fontStyle="bold" fill="#fff" listening={false} />
+                    <Text x={point.x + 14 / view.scale} y={point.y - 8 / view.scale}
+                      text={`${waypoint.id}${waypoint.pass_axis ? ` · ${waypoint.pass_axis.toUpperCase()}축 통과` : ''}`}
+                      fontSize={11 / view.scale} fill="#9a5a06" listening={false} />
                   </Fragment>
                 })}
                 <Text x={0} y={spanY + 10 / view.scale} text={`X →  |  Y ↑  |  ${floor?.id ?? ''}`} fill="#526f7f" fontSize={11 / view.scale} listening={false} />
@@ -315,15 +404,22 @@ export function PlanEditor({
             </Stage>
             <div className="canvas-controls"><button type="button" onClick={() => zoom(1.25)} aria-label="확대">+</button><button type="button" onClick={() => zoom(1 / 1.25)} aria-label="축소">−</button><button type="button" onClick={() => setView(fitView(bounds, width, HEIGHT))} aria-label="화면 맞춤">□</button></div>
           </div>
-          <div className="canvas-footer"><span>{mode === 'pan' ? '드래그하여 화면 이동 · 휠로 확대/축소' : mode === 'add-port' ? '도면을 클릭하면 Port가 생성됩니다.' : mode.startsWith('add') ? '드래그해서 직사각형을 그리세요 · 클릭만 하면 기본 크기로 생성' : '객체 선택 · 드래그 이동 · 모서리 점으로 크기 변경 · Delete 키로 삭제'}</span><strong>{hovered ? `X ${hovered[0].toFixed(2)} · Y ${hovered[1].toFixed(2)} m` : '세계좌표 m'}</strong></div>
-          <div className="plan-legend"><span><i className="legend-wall" /> 장애물</span><span><i className="legend-zone" /> Zone</span><span><i className="legend-port" /> Port</span><span><i className="legend-route" /> 경로</span><span><i className="legend-invalid" /> 위반 구간</span></div>
+          <div className="canvas-footer"><span>{mode === 'pan' ? '드래그하여 화면 이동 · 휠로 확대/축소' : mode === 'add-port' ? '도면을 클릭하면 Port가 생성됩니다.' : mode === 'add-waypoint' ? `도면을 클릭할 때마다 ${selectedPipeId}의 다음 경유점이 추가됩니다(격자 칸 중심에 스냅). 끝나면 '선택'을 누르세요.` : mode.startsWith('add') ? '드래그해서 직사각형을 그리세요 · 클릭만 하면 기본 크기로 생성' : '객체 선택 · 드래그 이동 · 모서리 점으로 크기 변경 · Delete 키로 삭제'}</span><strong>{hovered ? `X ${hovered[0].toFixed(2)} · Y ${hovered[1].toFixed(2)} m` : '세계좌표 m'}</strong></div>
+          <div className="plan-legend"><span><i className="legend-wall" /> 장애물</span><span><i className="legend-zone" /> Zone</span><span><i className="legend-port" /> Port</span><span><i className="legend-start" /> 시작점 S</span><span><i className="legend-end" /> 끝점 E</span><span><i className="legend-waypoint" /> 경유점</span><span><i className="legend-route" /> 경로</span><span><i className="legend-invalid" /> 위반 구간</span></div>
         </div>
         <EditorInspector
-          key={`${selection?.kind ?? 'none'}:${selection?.id ?? ''}:${selectedPipeId}:${JSON.stringify(selection?.kind === 'port' ? visiblePorts.find((port) => port.id === selection.id) : selection?.kind === 'obstacle' ? project.obstacles.find((item) => item.id === selection.id) : project.zones.find((item) => item.id === selection?.id))}:${JSON.stringify(project.constraints)}`}
+          key={`${selection?.kind ?? 'none'}:${selection?.id ?? ''}:${selectedPipeId}:${JSON.stringify(selection?.kind === 'port' ? visiblePorts.find((port) => port.id === selection.id) : selection?.kind === 'waypoint' ? findWaypoint(project, selection.id) : selection?.kind === 'obstacle' ? project.obstacles.find((item) => item.id === selection.id) : project.zones.find((item) => item.id === selection?.id))}:${JSON.stringify(project.constraints)}`}
           project={project} selection={selection} selectedPipeId={selectedPipeId} busy={busy}
           onCommit={commit} onError={onError} onDelete={deleteSelected}
+          onFocusRule={onFocusRule}
+          onAddRule={(targetId) => setNewRuleRequest((request) => ({ targetId, nonce: (request?.nonce ?? 0) + 1 }))}
         />
       </div>
+      <RulesPanel
+        project={project} selectedPipeId={selectedPipeId} busy={busy}
+        focusRuleId={focusRuleId} onFocusRule={onFocusRule} newRuleRequest={newRuleRequest}
+        onCommit={commit}
+      />
     </section>
   )
 }

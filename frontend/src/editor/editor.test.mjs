@@ -71,26 +71,26 @@ test('creating Zone and Port keeps unique IDs and metre coordinates', () => {
   assert.throws(() => updatePort(original, 'PORT-A', [99, 2, 1]), /건물 내부/)
 })
 
-test('rule editing requires an explicit distance and valid target', () => {
+test('rule editing covers several pipes and targets and requires a distance for clearance', () => {
   const original = project()
-  assert.throws(() => updateRule(original, 'RULE-001', {
-    type: 'MIN_CLEARANCE', status: 'draft', targetId: 'WALL-01', distanceText: '',
-  }), /거리/)
-  const changed = updateRule(original, 'RULE-001', {
-    type: 'MIN_CLEARANCE', status: 'needs_review', targetId: 'WALL-01', distanceText: '0.3',
-  })
+  const base = { type: 'MIN_CLEARANCE', status: 'draft', pipeIds: ['PIPE-101'], targetIds: ['WALL-01'], distanceText: '' }
+  assert.throws(() => updateRule(original, 'RULE-001', base), /거리/)
+  const changed = updateRule(original, 'RULE-001', { ...base, status: 'needs_review', targetIds: ['WALL-01', 'ZONE-A'], distanceText: '0.3' })
+  assert.deepEqual(changed.constraints[0].scope, { pipe_ids: ['PIPE-101'], target_ids: ['WALL-01', 'ZONE-A'] })
   assert.equal(changed.constraints[0].parameters.distance_m, 0.3)
   assert.equal(changed.constraints[0].status, 'needs_review')
   assert.equal(original.constraints[0].status, 'approved')
-  assert.throws(() => updateRule(original, 'RULE-001', {
-    type: 'KEEP_OUT', status: 'approved', targetId: 'WALL-01', distanceText: '',
-  }), /대상/)
+  assert.throws(() => updateRule(original, 'RULE-001', { ...base, type: 'KEEP_OUT', targetIds: ['ZONE-A', 'WALL-01'] }), /Zone이어야/)
+  assert.throws(() => updateRule(original, 'RULE-001', { ...base, targetIds: [], distanceText: '1' }), /대상을 하나 이상/)
+  assert.throws(() => updateRule(original, 'RULE-001', { ...base, pipeIds: [], distanceText: '1' }), /배관을 하나 이상/)
+  assert.throws(() => updateRule(original, 'RULE-001', { ...base, pipeIds: ['NOPE'], distanceText: '1' }), /존재하지 않는 배관/)
+  assert.throws(() => updateRule(original, 'RULE-001', { ...base, targetIds: ['WALL-01', 'WALL-01'], distanceText: '1' }), /두 번/)
 })
 
 test('new rules require real provenance and remain draft until explicitly approved', () => {
   const original = project()
   const input = {
-    pipeId: 'PIPE-101', targetId: 'ZONE-A', type: 'KEEP_OUT', distanceText: '',
+    pipeIds: ['PIPE-101'], targetIds: ['ZONE-A'], type: 'KEEP_OUT', distanceText: '',
     documentId: 'STUDY-01', revision: '1', clauseId: 'A-1', evidence: 'Synthetic exclusion',
   }
   assert.throws(() => createRule(original, { ...input, evidence: '' }), /근거/)
@@ -99,6 +99,27 @@ test('new rules require real provenance and remain draft until explicitly approv
   assert.equal(added.id, 'RULE-002')
   assert.equal(added.project.constraints[1].status, 'draft')
   assert.equal(added.project.constraints[1].source.document_id, 'STUDY-01')
+  const two = createRule(added.project, { ...input, type: 'MIN_CLEARANCE', targetIds: ['WALL-01', 'ZONE-A'], distanceText: '0.5' })
+  assert.equal(two.id, 'RULE-003')
+  assert.deepEqual(two.project.constraints[2].scope.target_ids, ['WALL-01', 'ZONE-A'])
+  assert.equal(two.project.constraints.length, 3, 'rules accumulate; none replaces another')
+})
+
+test('rules read as sentences, report their effect per pipe, and can be deleted', async () => {
+  const { deleteRule, describeRule, ruleEffect, ruleTargetOptions } = await import('./model.ts')
+  const original = project()
+  const rule = original.constraints[0]
+  assert.equal(describeRule(rule), 'PIPE-101 배관은 ZONE-A 안으로 들어갈 수 없습니다.')
+  assert.equal(describeRule({ ...rule, type: 'MIN_CLEARANCE', parameters: { distance_m: 0.5 }, scope: { pipe_ids: ['P1', 'P2'], target_ids: ['W1', 'Z1'] } }),
+    'P1, P2 배관 외곽은 W1, Z1 표면에서 0.5 m 이상 떨어져야 합니다.')
+  assert.equal(ruleEffect(rule, 'PIPE-101'), 'applied')
+  assert.equal(ruleEffect({ ...rule, status: 'draft' }, 'PIPE-101'), 'blocking')
+  assert.equal(ruleEffect({ ...rule, status: 'rejected' }, 'PIPE-101'), 'blocking')
+  assert.equal(ruleEffect(rule, 'PIPE-999'), 'other-pipe')
+  assert.deepEqual(ruleTargetOptions(original, 'KEEP_OUT'), ['ZONE-A'])
+  assert.deepEqual(ruleTargetOptions(original, 'MIN_CLEARANCE'), ['ZONE-A', 'WALL-01'])
+  assert.equal(deleteRule(original, 'RULE-001').constraints.length, 0)
+  assert.throws(() => deleteRule(original, 'RULE-404'), /RULE-404/)
 })
 
 test('route projection clips a vertical segment to the selected floor', () => {
@@ -217,4 +238,87 @@ test('default port height reuses a port on the floor, else 1 m above the slab', 
   assert.equal(defaultPortHeight(original, original.building.floors[0]), 1)
   assert.equal(defaultPortHeight(original, { id: 'L2', z_min_m: 4, z_max_m: 8 }), 5)
   assert.equal(defaultPortHeight(original, { id: 'L3', z_min_m: 4, z_max_m: 5 }), 4.5)
+})
+
+test('waypoints: add in sequence, snap to cell centres, reorder, edit and remove', async () => {
+  const { addWaypoint, findWaypoint, portRole, removeWaypoint, reorderWaypoint, snapToCellCentre, updateWaypoint, floorsShowing } = await import('./model.ts')
+  const base = project()
+  const floor = base.building.floors[0]
+  assert.equal(portRole(base, 'PIPE-101', 'PORT-A'), 'start')
+  assert.equal(portRole(base, 'PIPE-101', 'PORT-B'), 'end')
+  assert.equal(portRole(base, 'NO-PIPE', 'PORT-A'), null)
+  // Demo grid 0.5 m from x=0: cell centres at 0.25, 0.75, ...
+  assert.deepEqual(snapToCellCentre(base, [2.1, 3.4, 1.0]), [2.25, 3.25, 1.25])
+  assert.deepEqual(snapToCellCentre(base, [-5, 99, 0]), [0.25, 9.75, 0.25])
+
+  const first = addWaypoint(base, 'PIPE-101', [2.1, 3.4, 0], floor, true)
+  assert.deepEqual(first.selection, { kind: 'waypoint', id: 'WP-001' })
+  assert.deepEqual(first.project.pipes[0].waypoints, [{ id: 'WP-001', position_m: [2.25, 3.25, 1.25] }])
+  assert.equal(base.pipes[0].waypoints, undefined, 'input project is not mutated')
+  const second = addWaypoint(first.project, 'PIPE-101', [8, 9, 0], floor, true)
+  assert.deepEqual(second.project.pipes[0].waypoints.map((item) => item.id), ['WP-001', 'WP-002'])
+  assert.equal(second.project.pipes[0].waypoints[1].position_m[2], 1.25, 'reuses the floor height of earlier waypoints')
+  assert.deepEqual(floorsShowing(second.project, second.selection), ['L1'])
+  assert.throws(() => addWaypoint(base, 'NO-PIPE', [1, 1, 1], floor, true), /배관/)
+
+  const swapped = reorderWaypoint(second.project, 'WP-002', -1)
+  assert.deepEqual(swapped.pipes[0].waypoints.map((item) => item.id), ['WP-002', 'WP-001'])
+  assert.equal(reorderWaypoint(swapped, 'WP-002', -1), swapped, 'first stays first')
+  assert.equal(findWaypoint(swapped, 'WP-001').index, 1)
+
+  const edited = updateWaypoint(swapped, 'WP-001', { position: [4.25, 9.25, 2.25], passAxis: 'x', note: '  C-101 sleeve  ' })
+  assert.deepEqual(findWaypoint(edited, 'WP-001').waypoint, { id: 'WP-001', position_m: [4.25, 9.25, 2.25], pass_axis: 'x', note: 'C-101 sleeve' })
+  const cleared = updateWaypoint(edited, 'WP-001', { passAxis: null, note: '' })
+  assert.deepEqual(findWaypoint(cleared, 'WP-001').waypoint, { id: 'WP-001', position_m: [4.25, 9.25, 2.25] })
+  assert.throws(() => updateWaypoint(edited, 'WP-001', { position: [99, 1, 1] }), /건물 내부/)
+  assert.throws(() => updateWaypoint(edited, 'WP-404', {}), /WP-404/)
+
+  const one = removeWaypoint(edited, 'WP-002')
+  assert.deepEqual(one.pipes[0].waypoints.map((item) => item.id), ['WP-001'])
+  const none = deleteObject(one, { kind: 'waypoint', id: 'WP-001' })
+  assert.equal('waypoints' in none.pipes[0], false, 'empty sequence serialises like the original pipe')
+  assert.deepEqual(none, base)
+})
+
+test('route floor crossings mark where the route continues to the next storey', async () => {
+  const { routeFloorCrossings } = await import('./model.ts')
+  const floors = [{ id: 'L1', z_min_m: 0, z_max_m: 6 }, { id: 'L2', z_min_m: 6, z_max_m: 12 }]
+  const points = [[1, 1, 1], [4, 1, 1], [4, 1, 8], [9, 2, 8], [9, 2, 3], [10, 2, 3]]
+  assert.deepEqual(routeFloorCrossings(points, floors[0], floors), [
+    { at: [4, 1, 6], direction: 'up', floorId: 'L2' },
+    { at: [9, 2, 6], direction: 'up', floorId: 'L2' },
+  ])
+  assert.deepEqual(routeFloorCrossings(points, floors[1], floors), [
+    { at: [4, 1, 6], direction: 'down', floorId: 'L1' },
+    { at: [9, 2, 6], direction: 'down', floorId: 'L1' },
+  ])
+  assert.deepEqual(routeFloorCrossings([[1, 1, 1], [5, 1, 1], [5, 1, 4]], floors[0], floors), [], 'stays on L1')
+  assert.deepEqual(routeFloorCrossings([[1, 1, 5], [1, 1, 6]], floors[0], floors), [], 'touching the ceiling is not leaving')
+})
+
+test('new-rule form lists every required field still missing', async () => {
+  const { missingForNewRule } = await import('./model.ts')
+  const empty = { pipeIds: ['PIPE-101'], targetIds: [], type: 'MIN_CLEARANCE', distanceText: '', documentId: '', revision: '', clauseId: '', evidence: '' }
+  assert.deepEqual(missingForNewRule(empty), ['대상', '최소 거리', '문서 ID', '개정판', '조항 ID', '근거 문구'])
+  assert.deepEqual(missingForNewRule({ ...empty, type: 'KEEP_OUT', pipeIds: [] }), ['적용 배관', '대상', '문서 ID', '개정판', '조항 ID', '근거 문구'])
+  assert.deepEqual(missingForNewRule({ ...empty, targetIds: ['WALL-01'], distanceText: '1', documentId: 'S', revision: '1', clauseId: 'A', evidence: 'x' }), [])
+})
+
+test('default rule source fills study-assumption provenance with the next free clause', async () => {
+  const { createRule, defaultRuleSource, missingForNewRule } = await import('./model.ts')
+  const base = project()
+  const scope = { type: 'MIN_CLEARANCE', pipeIds: ['PIPE-101'], targetIds: ['WALL-01'], distanceText: '0.5' }
+  const first = defaultRuleSource(base, scope)
+  assert.deepEqual(first, {
+    documentId: 'SYNTH-ASSUMPTION', revision: '1', clauseId: 'A-1',
+    evidence: '연구용 가정(실제 법규·설계기준 값 아님): PIPE-101 배관 외곽은 WALL-01 표면에서 0.5 m 이상 떨어진다.',
+  })
+  const created = createRule(base, { ...scope, ...first })
+  const rule = created.project.constraints.at(-1)
+  assert.equal(rule.status, 'draft', 'still a draft that needs explicit approval')
+  assert.equal(rule.source.source_type, 'synthetic_assumption')
+  assert.equal(defaultRuleSource(created.project, scope).clauseId, 'A-2', 'clause numbers do not repeat')
+  assert.match(defaultRuleSource(base, { type: 'KEEP_OUT', pipeIds: ['PIPE-101'], targetIds: ['ZONE-A'], distanceText: '' }).evidence, /ZONE-A 안으로 들어가지 않는다/)
+  // Defaults never fill the rule itself: scope and distance stay required.
+  assert.deepEqual(missingForNewRule({ ...scope, targetIds: [], distanceText: '', ...defaultRuleSource(base, scope) }), ['대상', '최소 거리'])
 })
