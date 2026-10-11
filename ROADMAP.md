@@ -7,6 +7,79 @@
 
 ---
 
+## 빠른 재현: GitHub에서 받아 실행하기
+
+저장소: https://github.com/shstorage/plan_route (기본 브랜치 `main`)
+
+**사전 설치**
+
+| 도구 | 버전 | 비고 |
+|---|---|---|
+| Git | 최신 | |
+| [uv](https://docs.astral.sh/uv/) | 0.12 이상 권장 | Python 3.12는 `.python-version`을 보고 uv가 자동으로 받습니다. 따로 설치할 필요 없음 |
+| Node.js | 22.18 이상 | `npm run test:editor`/`test:viewer`가 Node의 TypeScript 타입 제거 실행을 사용 |
+
+확인한 환경: Windows 11, Python 3.12.14, uv 0.12.7, Node.js 22.23.2.
+
+**1) 받기와 의존성 복원**
+
+```bash
+git clone https://github.com/shstorage/plan_route.git
+cd plan_route
+
+# 백엔드: uv.lock에 고정된 버전 그대로 설치(.venv 생성)
+uv sync --locked
+
+# 프런트엔드: package-lock.json에 고정된 버전 그대로 설치
+cd frontend
+npm ci
+cd ..
+```
+
+`uv sync`(잠금 없이)나 `npm install`은 잠금 파일을 바꿀 수 있으므로, 재현할 때는 `--locked` / `npm ci`를 씁니다.
+`uv init`·`npm create vite`는 다시 실행하지 않습니다(§4.1).
+
+**2) 설치가 맞는지 테스트로 확인**
+
+```bash
+# 프로젝트 루트
+uv run pytest -q
+uv run ruff check .
+
+# 프런트엔드
+cd frontend
+npm run test:editor
+npm run test:viewer
+npm run lint
+npm run build
+cd ..
+```
+
+모두 통과해야 같은 상태가 재현된 것입니다.
+
+**3) 실행 (터미널 2개)**
+
+```bash
+# 터미널 1 — 프로젝트 루트: API 서버
+uv run uvicorn plan_route.main:app --reload --host 127.0.0.1 --port 8000
+
+# 터미널 2 — frontend/: 웹 UI
+cd frontend
+npm run dev -- --host 127.0.0.1
+```
+
+브라우저에서 http://127.0.0.1:5173 을 엽니다. 합성 플랜트 예제(60×40×12 m, 2개 층)가 자동으로 열립니다.
+API 문서는 http://127.0.0.1:8000/docs, 상태 확인은 http://127.0.0.1:8000/api/health 입니다.
+
+**참고**
+
+- 저장한 프로젝트와 경로 결과는 `data/projects/`, `data/results/`에 생기며 Git에는 올라가지 않습니다. 처음 실행 시 자동으로 만들어집니다.
+- API 서버는 `127.0.0.1:5173`/`localhost:5173`에서 오는 요청만 허용(CORS)합니다. 5173 포트가 이미 쓰이면 Vite가 다른 포트로 옮기지 않고 종료하므로, 사용 중인 프로세스를 먼저 끕니다.
+- API 주소를 바꾸려면 `frontend/.env.example`을 `frontend/.env.local`로 복사해 `VITE_API_BASE_URL`을 고칩니다. 이 파일에 비밀키를 넣지 않습니다.
+- 기능별 사용법과 수동 검수 절차는 `README.md`, 설계 결정은 `docs/decisions/`를 봅니다.
+
+---
+
 ## 0. 한눈에 보는 결론과 실행 지침
 
 ### 0.1 제안 연구 제목
