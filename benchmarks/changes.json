@@ -1,0 +1,11 @@
+{
+  "suite": "changes",
+  "seed": 20261012,
+  "repeats": 3,
+  "algorithms": ["astar", "dijkstra"],
+  "scene_seeds": [11, 23, 42, 71, 101],
+  "evaluation_seeds": [211, 307],
+  "resolutions_m": [1.0, 0.5],
+  "oracle_max_cells": 600,
+  "bootstrap_resamples": 2000
+}

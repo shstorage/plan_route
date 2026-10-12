@@ -33,6 +33,58 @@ class ProjectNotFoundError(FileNotFoundError):
     pass
 
 
+class ProjectSummary(ContractModel):
+    project_id: str
+    project_name: str | None
+    schema_version: str
+    revision: int
+    updated_at: datetime
+    equipment_count: int
+    pipe_count: int
+
+
+class ProjectListIssue(ContractModel):
+    filename: str
+    message: str
+
+
+class ProjectList(ContractModel):
+    projects: list[ProjectSummary] = Field(default_factory=list)
+    issues: list[ProjectListIssue] = Field(default_factory=list)
+
+
+def list_projects() -> ProjectList:
+    """List verified documents; a broken file must not hide other projects."""
+    result = ProjectList()
+    with _STORE_LOCK:
+        for path in sorted(PROJECTS_DIR.glob("*.json")):
+            try:
+                saved = load_project(path.stem)
+            except (ValueError, OSError):
+                result.issues.append(
+                    ProjectListIssue(
+                        filename=path.name,
+                        message="저장 파일을 읽거나 검증하지 못했습니다.",
+                    )
+                )
+                continue
+            result.projects.append(
+                ProjectSummary(
+                    project_id=saved.project_id,
+                    project_name=saved.project.project_name,
+                    schema_version=saved.schema_version,
+                    revision=saved.revision,
+                    updated_at=saved.updated_at,
+                    equipment_count=len(saved.project.equipment),
+                    pipe_count=len(saved.project.pipes),
+                )
+            )
+    result.projects.sort(
+        key=lambda item: (item.updated_at, item.project_id), reverse=True
+    )
+    return result
+
+
 def _project_path(project_id: str) -> Path:
     if not _ID_PATTERN.fullmatch(project_id):
         raise ValueError("project_id must contain only letters, digits, '_' or '-'")

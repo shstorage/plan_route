@@ -4,11 +4,28 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { sceneToWorld, worldBoxToScene, worldToScene } from './axes.ts'
 import { buildSceneModel, cameraFor, ruleTargetIds } from './scene.ts'
-import { floorsShowing, moveBox, updatePort } from '../editor/model.ts'
+import { createBlankProject, createEquipment, deleteEquipment, floorsShowing, moveBox, updatePort } from '../editor/model.ts'
 
 const fixture = (name) => new URL(`../../../src/plan_route/fixtures/${name}`, import.meta.url)
 const load = (name) => JSON.parse(readFileSync(fileURLToPath(fixture(name)), 'utf8'))
 const demo = () => load('demo_project.json')
+
+test('blank equipment construction and translation use the same bodies and ports in 3D', () => {
+  const blank = createBlankProject()
+  assert.equal(buildSceneModel(blank, null, '').boxes.length, 0)
+  const created = createEquipment(blank, 'pump', [5, 6, 0], blank.building.floors[0], 0.5)
+  const scene = buildSceneModel(created.project, null, '')
+  assert.equal(scene.boxes.length, 1)
+  assert.equal(scene.ports.length, 2)
+  const body = created.project.obstacles[0]
+  const moved = moveBox(created.project, 'obstacle', body.id, body.shape.min_m[0] + 1, body.shape.max_m[1], null)
+  const movedScene = buildSceneModel(moved, null, '')
+  assert.deepEqual(movedScene.boxes[0].center, worldBoxToScene(moved.obstacles[0].shape).center)
+  moved.equipment[0].ports.forEach((port, index) => assert.deepEqual(movedScene.ports[index].center, worldToScene(port.position_m)))
+  const removed = deleteEquipment(moved, created.equipmentId)
+  assert.equal(buildSceneModel(removed, null, '').ports.length, 0)
+  assert.equal(buildSceneModel(removed, null, '').boxes.length, 0)
+})
 
 function cross(a, b) {
   return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]].map((value) => value + 0)

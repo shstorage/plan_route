@@ -12,12 +12,19 @@ from pydantic import BaseModel, Field
 from plan_route.models.engineering import EngineeringProject
 from plan_route.models.geometry import Identifier
 from plan_route.services.project_store import (
+    ProjectList,
     ProjectNotFoundError,
+    list_projects,
     load_project,
     save_project,
 )
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+
+
+@router.get("", response_model=ProjectList)
+def get_project_list() -> ProjectList:
+    return list_projects()
 
 
 class ValidationSuccess(BaseModel):

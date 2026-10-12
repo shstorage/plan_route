@@ -1,6 +1,7 @@
 """P06 project persistence, versioning, reload, and path safety tests."""
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -121,3 +122,67 @@ def test_project_api_save_get_revisions_and_errors():
         assert invalid.status_code == 422
         assert invalid.json()["error_code"] == "INVALID_INPUT"
         assert not (project_store.PROJECTS_DIR.parent / "escape.json").exists()
+
+
+def test_project_list_updates_names_counts_and_revision_after_saving():
+    project = load_demo_project().model_dump(mode="json")
+    project.update(project_id="NAMED-LIST", project_name="test1")
+    with TestClient(app) as client:
+        assert client.get("/api/projects").json() == {"projects": [], "issues": []}
+        assert client.post("/api/projects/save", json=project).status_code == 200
+        first = client.get("/api/projects").json()["projects"]
+        assert len(first) == 1
+        assert first[0]["project_name"] == "test1"
+        assert first[0]["equipment_count"] == len(project["equipment"])
+        assert first[0]["pipe_count"] == len(project["pipes"])
+        project["project_name"] = "test11"
+        assert client.post("/api/projects/save", json=project).status_code == 200
+        latest = client.get("/api/projects").json()["projects"]
+        assert len(latest) == 1 and latest[0]["project_name"] == "test11"
+        assert latest[0]["project_id"] == "NAMED-LIST"
+        assert latest[0]["revision"] == 2
+        loaded = client.get("/api/projects/NAMED-LIST").json()
+        assert loaded["project_name"] == "test11"
+        assert loaded["equipment"] == project["equipment"]
+
+
+def test_list_keeps_legacy_projects_and_reports_corrupt_files_without_deleting():
+    project = load_demo_project()
+    project_store.save_project(project)
+    bad = project_store.PROJECTS_DIR / "BROKEN.json"
+    bad.write_text("broken JSON", encoding="utf-8")
+    with TestClient(app) as client:
+        response = client.get("/api/projects")
+        assert response.status_code == 200
+        listing = response.json()
+        assert listing["projects"][0]["project_name"] is None
+        assert listing["issues"][0]["filename"] == "BROKEN.json"
+        assert client.get("/api/projects/demo").status_code == 200
+    assert bad.read_text(encoding="utf-8") == "broken JSON"
+
+
+def test_list_verifies_hash_and_sorts_latest_saved_first(monkeypatch):
+    start = datetime(2026, 10, 12, tzinfo=timezone.utc)
+    instants = iter([start, start + timedelta(seconds=1)])
+
+    class Clock:
+        @staticmethod
+        def now(_timezone):
+            return next(instants)
+
+    monkeypatch.setattr(project_store, "datetime", Clock)
+    project = load_demo_project()
+    other = project.model_copy(update={"project_id": "SECOND"})
+    project_store.save_project(project)
+    project_store.save_project(other)
+    listing = project_store.list_projects()
+    assert [item.project_id for item in listing.projects] == [
+        "SECOND", project.project_id
+    ]
+    path = project_store.PROJECTS_DIR / "SECOND.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["project"]["project_name"] = "changed without updating hash"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    listing = project_store.list_projects()
+    assert [item.project_id for item in listing.projects] == [project.project_id]
+    assert listing.issues[0].filename == "SECOND.json"

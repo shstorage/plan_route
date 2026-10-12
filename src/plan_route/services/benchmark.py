@@ -113,7 +113,7 @@ def _environment(batch: Path) -> dict:
             archive.writestr(relative, payload)
     git_status = _command(["git", "status", "--porcelain"])
     return {
-        "benchmark_contract": "p10ab_benchmark_v2",
+        "benchmark_contract": "p10abc_benchmark_v3",
         "solver_contract": "directional_grid_p08c_v2",
         "validator_contract": "orthogonal_core_canonical_connectors_v2",
         "self_clearance_policy": "straight_runs_arc_2sqrt3_radius_v2",
@@ -287,11 +287,16 @@ def run_benchmark(config: BenchmarkConfig, output: Path) -> Path:
     batch.mkdir(exist_ok=False)
     _write_json(batch / "config.json", config.model_dump(mode="json"))
     _write_json(batch / "environment.json", _environment(batch))
-    cases = (
-        pilot_cases(config.seed)
-        if config.suite == "pilot"
-        else comparison_cases(config)
-    )
+    if config.suite == "changes":
+        from plan_route.services.benchmark_changes import change_cases
+
+        cases = change_cases(config)
+    else:
+        cases = (
+            pilot_cases(config.seed)
+            if config.suite == "pilot"
+            else comparison_cases(config)
+        )
     rows, runs, probe_failures = [], [], []
     _write_json(
         batch / "manifest.json",
@@ -315,7 +320,7 @@ def run_benchmark(config: BenchmarkConfig, output: Path) -> Path:
             for item in probes
             if not item["passed"]
         )
-        if config.suite == "comparison":
+        if config.suite != "pilot":
             started = perf_counter()
             reference_cache[case.case_id] = (
                 reference_cost(case.reference_graph, config.oracle_max_cells),
@@ -327,7 +332,7 @@ def run_benchmark(config: BenchmarkConfig, output: Path) -> Path:
         for repeat in range(1, config.repeats + 1)
         for algorithm in config.algorithms
     ]
-    if config.suite == "comparison":
+    if config.suite != "pilot":
         Random(config.seed).shuffle(jobs)
     _write_json(
         batch / "execution_plan.json",
@@ -357,7 +362,7 @@ def run_benchmark(config: BenchmarkConfig, output: Path) -> Path:
         canonical = json.dumps(request, sort_keys=True, separators=(",", ":"))
         input_sha = hashlib.sha256(canonical.encode()).hexdigest()
         _write_json(run_dir / "input.json", request)
-        if config.suite == "comparison":
+        if config.suite != "pilot":
             reference, oracle_ms = reference_cache[case.case_id]
         else:
             started = perf_counter()
@@ -384,7 +389,7 @@ def run_benchmark(config: BenchmarkConfig, output: Path) -> Path:
             evaluation=evaluation,
             oracle_ms=oracle_ms,
             execution_index=execution_index,
-            reference_timing_scope="case" if config.suite == "comparison" else "run",
+            reference_timing_scope="run" if config.suite == "pilot" else "case",
         )
         _write_json(run_dir / "run.json", run.model_dump(mode="json"))
         if witness:
@@ -456,7 +461,7 @@ def run_benchmark(config: BenchmarkConfig, output: Path) -> Path:
         "scope": (
             "Fixed synthetic scene comparison; repeats and resolutions "
             "are not independent scenes."
-            if config.suite == "comparison"
+            if config.suite != "pilot"
             else "Pilot contract checks only; repeats are not independent scene "
             "samples or evidence of superiority."
         ),
@@ -465,5 +470,9 @@ def run_benchmark(config: BenchmarkConfig, output: Path) -> Path:
         from plan_route.services.benchmark_statistics import write_comparison
 
         summary["analysis"] = write_comparison(batch, cases, runs, config)
+    elif config.suite == "changes":
+        from plan_route.services.benchmark_change_analysis import write_changes
+
+        summary["analysis"] = write_changes(batch, cases, runs, config)
     _write_json(batch / "summary.json", summary)
     return batch

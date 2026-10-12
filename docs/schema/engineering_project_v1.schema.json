@@ -788,6 +788,21 @@
       "title": "Project Id",
       "type": "string"
     },
+    "project_name": {
+      "anyOf": [
+        {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional human-readable name; project_id remains the storage key.",
+      "title": "Project Name"
+    },
     "routing_config": {
       "$ref": "#/$defs/RoutingConfig"
     },

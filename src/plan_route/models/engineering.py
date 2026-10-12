@@ -1,8 +1,8 @@
 """Single-source EngineeringProject document and cross-reference validation."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, StringConstraints, model_validator
 
 from plan_route.models.constraints import Constraint, ConstraintType
 from plan_route.models.geometry import (
@@ -131,6 +131,13 @@ class RoutingConfig(ContractModel):
 class EngineeringProject(ContractModel):
     schema_version: Literal["1.0.0"]
     project_id: Identifier
+    project_name: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
+    ] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Optional human-readable name; project_id remains the storage key.",
+    )
     study_type: Literal["synthetic_benchmark"]
     unit_system: Literal["SI"]
     coordinate_frame: CoordinateFrame

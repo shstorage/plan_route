@@ -3,12 +3,13 @@ import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Edges, Line, OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
 import type { Aabb, EngineeringProject, RouteSolveReport } from '../api/client'
-import type { Selection } from '../editor/model.ts'
+import { pipeConnectionPoints, selectionLabel, type Selection } from '../editor/model.ts'
 import { ROLE_COLORS } from '../editor/roles.ts'
 import { TextLabel } from './TextLabel'
 import { worldToScene, type ScenePoint } from './axes.ts'
 import { buildSceneModel, cameraFor, ruleTargetIds, type BoxStyle, type CameraPreset, type SceneBox, type SceneSegment } from './scene.ts'
 import './Viewer3D.css'
+import { RouteStatusNotice } from '../editor/RouteStatusNotice'
 
 type Props = {
   project: EngineeringProject
@@ -19,6 +20,10 @@ type Props = {
   /** Shared with the 2D rules panel. */
   focusRuleId: string
   onFocusRule: (ruleId: string) => void
+  busy: boolean
+  solving: boolean
+  onSelectPipe: (pipeId: string) => void
+  onSolve: () => void
 }
 
 type CameraRequest = { preset: CameraPreset; nonce: number }
@@ -147,7 +152,7 @@ function CameraRig({ boundsKey, request }: { boundsKey: string; request: CameraR
   return null
 }
 
-export function Viewer3D({ project, route, selectedPipeId, selection, onSelect, focusRuleId: ruleId, onFocusRule: setRuleId }: Props) {
+export function Viewer3D({ project, route, selectedPipeId, selection, onSelect, focusRuleId: ruleId, onFocusRule: setRuleId, busy, solving, onSelectPipe, onSolve }: Props) {
   const [camera, setCamera] = useState<CameraRequest>({ preset: 'aerial', nonce: 0 })
   const [showTube, setShowTube] = useState(true)
   const [showSlabs, setShowSlabs] = useState(true)
@@ -165,18 +170,31 @@ export function Viewer3D({ project, route, selectedPipeId, selection, onSelect, 
   let gridStep = project.routing_config.grid_resolution_m
   while (gridSize / gridStep > 120) gridStep *= 2
   const sceneRoute = model.route
+  const connections = useMemo(() => project.pipes.flatMap((pipe) => {
+    if (route?.status === 'SUCCESS' && route.pipe_id === pipe.id) return []
+    const points = pipeConnectionPoints(project, pipe.id).map(worldToScene)
+    return points.length > 1 ? [{ id: pipe.id, points }] : []
+  }), [project, route])
   const portRadius = Math.max(0.12, Math.min(0.3, project.routing_config.grid_resolution_m * 0.6))
 
   return (
     <section className="viewer3d panel" aria-label="3D 보기">
       <div className="plan-heading">
-        <div><p className="step">03 / 3D VIEW</p><h2>3D 건물·배관 보기</h2><p>2D 도면과 같은 EngineeringProject JSON에서 그립니다. 객체를 클릭하면 2D 도면에서도 같은 ID가 선택됩니다.</p></div>
+        <div><h2>3D 건물·배관 보기</h2><p>객체를 클릭해 선택하세요. 2D와 선택·속성이 함께 바뀝니다.</p></div>
         <div className="plan-actions">
           <button type="button" className={camera.preset === 'aerial' ? 'tool active' : 'tool'} onClick={() => setCamera((value) => ({ preset: 'aerial', nonce: value.nonce + 1 }))}>조감도</button>
           <button type="button" className={camera.preset === 'plan' ? 'tool active' : 'tool'} onClick={() => setCamera((value) => ({ preset: 'plan', nonce: value.nonce + 1 }))}>평면도</button>
           <button type="button" className="button-secondary" onClick={() => setCamera((value) => ({ ...value, nonce: value.nonce + 1 }))}>카메라 리셋</button>
         </div>
       </div>
+      <div className="plan-run viewer-run" role="group" aria-label="3D 경로 계산">
+        <label>계산할 배관 <select aria-label="3D 계산할 배관" value={selectedPipeId} disabled={busy || !project.pipes.length} onChange={(event) => onSelectPipe(event.target.value)}>
+          {!project.pipes.length && <option value="">배관을 먼저 연결하세요</option>}
+          {project.pipes.map((pipe) => <option key={pipe.id} value={pipe.id}>{selectionLabel(project, { kind: 'pipe', id: pipe.id })}</option>)}
+        </select></label>
+        <button type="button" className="button-primary" disabled={busy || !project.pipes.some((pipe) => pipe.id === selectedPipeId)} onClick={onSolve}>{solving ? '계산 중…' : '경로 계산'}</button>
+      </div>
+      <RouteStatusNotice project={project} route={route} busy={busy} onSelect={onSelect} />
       <div className="viewer-toolbar">
         <label><input type="checkbox" checked={showTube} onChange={(event) => setShowTube(event.target.checked)} /> 배관 외경(보온 포함) 표시</label>
         <label><input type="checkbox" checked={showSlabs} onChange={(event) => setShowSlabs(event.target.checked)} /> 바닥판 표시</label>
@@ -247,8 +265,11 @@ export function Viewer3D({ project, route, selectedPipeId, selection, onSelect, 
               <TextLabel position={waypoint.center} text={String(waypoint.order)} color="#ffffff" background={isSelected ? SELECTED : ROLE_COLORS.waypoint} square heightPx={18} offsetPx={[14, 14]} />
             </group>
           })}
+          {connections.map((connection) => <group key={connection.id}>
+            <Line points={connection.points} color={selection?.kind === 'pipe' && selection.id === connection.id ? '#087fad' : '#63889b'} lineWidth={2} dashed dashSize={0.16} gapSize={0.12} onClick={(event: ThreeEvent<MouseEvent>) => { event.stopPropagation(); onSelect({ kind: 'pipe', id: connection.id }) }} />
+          </group>)}
           {sceneRoute && <group>
-            <Line points={sceneRoute.points} color="#06587a" lineWidth={2} />
+            <Line points={sceneRoute.points} color="#06587a" lineWidth={2} onClick={(event: ThreeEvent<MouseEvent>) => { event.stopPropagation(); onSelect({ kind: 'pipe', id: sceneRoute.pipeId }) }} />
             {sceneRoute.segments.filter((segment) => segment.invalid).map((segment) => (
               <Line key={`invalid-${segment.index}`} points={[segment.from, segment.to]} color="#df4047" lineWidth={4} />
             ))}
@@ -259,13 +280,13 @@ export function Viewer3D({ project, route, selectedPipeId, selection, onSelect, 
               </mesh>
             ))}
           </group>}
-          {selectedBox && <TextLabel position={[selectedBox.center[0], selectedBox.center[1] + selectedBox.size[1] / 2, selectedBox.center[2]]} text={selectedBox.selection.id} color="#ffffff" background="#0a789aee" offsetPx={[0, 16]} />}
-          {selectedPort && <TextLabel position={selectedPort.center} text={selectedPort.id} color="#ffffff" background="#0a789aee" offsetPx={[0, -18]} />}
+          {selectedBox && <TextLabel position={[selectedBox.center[0], selectedBox.center[1] + selectedBox.size[1] / 2, selectedBox.center[2]]} text={selectionLabel(project, selectedBox.selection)} color="#ffffff" background="#0a789aee" offsetPx={[0, 16]} />}
+          {selectedPort && <TextLabel position={selectedPort.center} text={selectionLabel(project, { kind: 'port', id: selectedPort.id })} color="#ffffff" background="#0a789aee" offsetPx={[0, -18]} />}
         </Canvas>
       </div>
       <div className="canvas-footer">
         <span>왼쪽 드래그 회전 · 오른쪽 드래그 이동 · 휠 확대/축소 · 클릭으로 선택</span>
-        <strong>{selection ? `선택: ${selection.kind} ${selection.id}` : '선택 없음'}{sceneRoute ? ` · 경로 ${sceneRoute.pipeId} ${sceneRoute.points.length}점` : ''}</strong>
+        <strong>{selection ? `선택: ${selectionLabel(project, selection)}` : '선택 없음'}{sceneRoute ? ' · 계산된 경로' : ''}</strong>
       </div>
       {focusRule && <p className="viewer-rule">{focusRule.id} 대상: {focusRule.scope.target_ids.join(', ') || '없음'} · 배관 {focusRule.scope.pipe_ids.join(', ')} · 출처 {focusRule.source.document_id} {focusRule.source.clause_id} ({focusRule.source.source_type})</p>}
       <div className="plan-legend">
@@ -273,11 +294,11 @@ export function Viewer3D({ project, route, selectedPipeId, selection, onSelect, 
         <span><i className="legend-slab" /> 바닥판</span>
         <span><i className="legend-keepout" /> KEEP_OUT Zone</span>
         <span><i className="legend-zone" /> 기타 Zone</span>
-        <span><i className="legend-port" /> Port</span>
+        <span><i className="legend-port" /> 연결점</span>
         <span><i className="legend-start" /> 시작점 S</span>
         <span><i className="legend-end" /> 끝점 E</span>
         <span><i className="legend-waypoint" /> 경유점(번호 = 순서)</span>
-        <span><i className="legend-route" /> 경로</span>
+        <span>┄ 연결 표시 (미계산)</span><span><i className="legend-route" /> 계산된 경로</span>
         <span><i className="legend-invalid" /> 위반 구간</span>
         <span><i className="legend-selected" /> 선택</span>
         <span><i className="legend-target" /> 규칙 대상</span>

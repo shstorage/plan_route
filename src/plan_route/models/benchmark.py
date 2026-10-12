@@ -1,4 +1,4 @@
-"""P10A/P10B synthetic experiment contracts; not production design data."""
+"""P10A/P10B/P10C synthetic experiments; not production design data."""
 
 from typing import Literal
 
@@ -10,7 +10,7 @@ from plan_route.models.results import RouteSolveReport, RouteStatus
 
 
 class BenchmarkConfig(ContractModel):
-    suite: Literal["pilot", "comparison"] = "pilot"
+    suite: Literal["pilot", "comparison", "changes"] = "pilot"
     seed: int = Field(default=42, ge=0, le=2**32 - 1, strict=True)
     repeats: int = Field(default=2, ge=1, le=100, strict=True)
     algorithms: list[Literal["astar", "dijkstra"]] = Field(
@@ -24,9 +24,9 @@ class BenchmarkConfig(ContractModel):
 
     @model_validator(mode="after")
     def check_comparison(self) -> "BenchmarkConfig":
-        if self.suite == "comparison":
+        if self.suite in {"comparison", "changes"}:
             if set(self.algorithms) != {"astar", "dijkstra"}:
-                raise ValueError("comparison requires both astar and dijkstra")
+                raise ValueError("comparison/changes requires both astar and dijkstra")
             for name in ("scene_seeds", "evaluation_seeds", "resolutions_m"):
                 values = getattr(self, name)
                 if not values or len(set(values)) != len(values):
@@ -38,14 +38,9 @@ class BenchmarkConfig(ContractModel):
                 for seed in [*self.scene_seeds, *self.evaluation_seeds]
             ):
                 raise ValueError("scene seeds must be unsigned 32-bit integers")
-            if (
-                7
-                * (len(self.scene_seeds) + len(self.evaluation_seeds))
-                * len(self.resolutions_m)
-                * len(self.algorithms)
-                * self.repeats
-                > 20000
-            ):
+            if (7 if self.suite == "comparison" else 12) * (
+                len(self.scene_seeds) + len(self.evaluation_seeds)
+            ) * len(self.resolutions_m) * len(self.algorithms) * self.repeats > 20000:
                 raise ValueError("comparison exceeds the 20000-run limit")
         return self
 
@@ -82,6 +77,14 @@ class BenchmarkCase(ContractModel):
     family: str = "pilot"
     seed: int | None = None
     expected_search_mode: str | None = None
+    comparison_parent_id: str | None = None
+    intervention: (
+        Literal[
+            "ADD_RULE", "DISTANCE_EDIT", "SOURCE_EDIT", "REMOVE_RULE", "APPROVAL_CHECK"
+        ]
+        | None
+    ) = None
+    changed_rule_ids: list[str] = Field(default_factory=list)
 
 
 class ReferenceResult(ContractModel):

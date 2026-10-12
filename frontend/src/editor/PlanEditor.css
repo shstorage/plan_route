@@ -1,9 +1,49 @@
 .plan-editor { margin: 0 0 22px; padding: 26px; }
+.plan-run { display: flex; align-items: center; gap: 8px; }
+.plan-run select { max-width: 200px; padding: 8px; border: 1px solid #d2dfe6; border-radius: 7px; background: #fff; }
+.plan-editor .plan-toolbar { position: sticky; top: 8px; z-index: 4; background: #fff; padding: 8px 0; margin: 12px 0 4px; }
+.plan-settings-row { margin: 0 0 12px; }
+.connection-guide { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 12px; margin: 0 0 10px; border-radius: 8px; background: #eaf5fa; color: #22516b; font-size: 12px; }
+.connection-guide span { flex: 1; }
+.plan-result-strip { margin-bottom: 10px; padding: 10px 12px; border-radius: 8px; font-size: 12px; background: #edf9f1; color: #276744; }
+.plan-result-strip.bad { background: #fff3f0; color: #9a4b3e; }
+.inspector-fieldset { display: grid; gap: 10px; border: 0; margin: 0; padding: 0; min-width: 0; }
+.inspector-section-title { color: #526f7f; font-size: 12px; font-weight: 700; }
+.inspector-kind { display: block; margin-top: 14px; }
+.inspector-stack { display: grid; gap: 8px; margin-top: 10px; }
+.inspector-delete { margin-top: 18px; }
+.inspector-details { margin-top: 16px; padding-top: 10px; border-top: 1px solid #dce6eb; font-size: 12px; color: #526f7f; }
+.inspector-details summary { cursor: pointer; font-weight: 700; }
+.rule-drawer { margin-top: 20px; }
+.plan-editor .plan-setup { display: block; }
+@media (max-width: 760px) { .plan-run { width: 100%; justify-content: space-between; } }
+.assembly-panel { margin: 0 0 14px; }
+.assembly-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.assembly-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.assembly-list { display: grid; gap: 8px; padding: 0; margin: 0; list-style: none; }
+.assembly-list li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.assembly-list li > :first-child { flex: 1; text-align: left; }
+@media (max-width: 760px) { .assembly-columns { grid-template-columns: 1fr; } }
 .plan-heading { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; }
 .plan-heading h2 { margin-top: 7px; }
 .plan-heading p:last-child { margin: 10px 0 0; color: #708593; font-size: 12px; }
 .plan-actions { display: flex; gap: 8px; }
 .plan-toolbar { display: flex; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin: 24px 0 14px; }
+.tool-palette { display: flex; align-items: end; gap: 14px; flex-wrap: wrap; }
+.tool-category { display: block; padding: 0 4px 5px; color: #8296a3; font-size: 10px; font-weight: 700; }
+.tool-palette .tool { display: inline-flex; align-items: center; gap: 6px; min-height: 37px; }
+.connection-tools { border-left: 1px solid #dce6eb; padding-left: 14px; }
+.connection-tools > button { border: 1px solid #b6d2df; background: #edf7fb; color: #0a789a; }
+.connection-tools > button.active { background: #0a789a; color: #fff; }
+.plan-run { align-self: end; }
+.inspector-tabs { display: flex; gap: 4px; margin-top: 16px; border-bottom: 1px solid #dce6eb; }
+.inspector-tabs button { flex: 1; border: 0; padding: 8px; background: transparent; color: #637c8a; font-size: 12px; }
+.inspector-tabs button[aria-selected="true"] { color: #087fad; font-weight: 700; border-bottom: 2px solid #087fad; }
+.nozzle-list { display: grid; gap: 7px; list-style: none; padding: 0; margin: 12px 0; }
+.nozzle-list li { display: flex; align-items: center; border: 1px solid #d2e0e7; border-radius: 8px; background: #fff; }
+.nozzle-select { display: grid; gap: 4px; flex: 1; padding: 10px; text-align: left; color: #284c60; border: 0; background: none; }
+.nozzle-select small { color: #7d91a0; font-size: 10px; }
+.nozzle-list button:disabled { opacity: .45; }
 .tool-group { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border: 1px solid #dce6eb; border-radius: 10px; background: #f3f8fa; }
 .tool { min-height: 31px; padding: 5px 10px; border: 0; border-radius: 7px; background: transparent; color: #5b7180; font-size: 11px; font-weight: 700; }
 .tool:hover:not(:disabled) { background: #e4eef2; }

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import {
   API_BASE_URL,
   ApiError,
@@ -15,8 +15,14 @@ import {
   type RouteSolveReport,
   type ValidationIssue,
 } from './api/client'
-import { PlanEditor } from './editor/PlanEditor'
-import type { Selection } from './editor/model.ts'
+import { PlanEditor, type EditorAction } from './editor/PlanEditor'
+import { ObjectInspector } from './editor/ObjectInspector'
+import { Popup } from './ui/Popup'
+import { onTabKeyDown } from './ui/tabs'
+import { NewProjectDialog, ProjectActions } from './ui/ProjectActions'
+import { ProjectLibrary } from './ui/ProjectLibrary'
+import { routeFailureText } from './editor/routeFeedback'
+import { copyExampleProject, createBlankProject, findWaypoint, renameProject, type Selection } from './editor/model.ts'
 import { pushHistory, redoHistory, undoHistory, type History } from './editor/history.ts'
 import './App.css'
 
@@ -133,24 +139,37 @@ function formatDate(value: string): string {
 }
 
 function App() {
+  const projectRevision = useRef(0)
   const [connection, setConnection] = useState<ConnectionState>({ status: 'loading' })
   const [attempt, setAttempt] = useState(0)
-  const [projectText, setProjectText] = useState('')
-  const [editorProject, setEditorProject] = useState<EngineeringProject | null>(null)
+  const [initialProject] = useState(() => createBlankProject(`SYNTH-NEW-${Date.now()}`, '새 프로젝트'))
+  const [projectText, setProjectText] = useState(() => JSON.stringify(initialProject, null, 2))
+  const [editorProject, setEditorProject] = useState<EngineeringProject | null>(initialProject)
   const [past, setPast] = useState<string[]>([])
   const [future, setFuture] = useState<string[]>([])
-  const [projectLabel, setProjectLabel] = useState('예제 불러오는 중')
   const [example, setExample] = useState<ExampleProject>('starter')
   const [selectedPipeId, setSelectedPipeId] = useState('')
   const [selection, setSelection] = useState<Selection | null>(null)
   const [focusRuleId, setFocusRuleId] = useState('')
-  const [lookupId, setLookupId] = useState('')
+  const [lookupId, setLookupId] = useState(initialProject.project_id)
   const [savedMeta, setSavedMeta] = useState<{ revision: number; updatedAt: string } | null>(null)
+  const [savedSignature, setSavedSignature] = useState<string | null>(null)
+  const [libraryRefresh, setLibraryRefresh] = useState(0)
+  const savedDocuments = useRef(new Map<string, { signature: string; meta: { revision: number; updatedAt: string } }>())
   const [validatedId, setValidatedId] = useState<string | null>(null)
   const [route, setRoute] = useState<RouteSolveReport | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [operation, setOperation] = useState<Operation>(null)
+  const [activeTab, setActiveTab] = useState<'2d' | '3d' | 'project' | 'results'>('2d')
+  const [projectSection, setProjectSection] = useState<'storage' | 'json'>('storage')
+  const [companionView, setCompanionView] = useState<'2d' | '3d' | null>(null)
+  const [editorAction, setEditorAction] = useState<EditorAction | null>(null)
+  const [newProjectOpen, setNewProjectOpen] = useState(false)
   const overview = useMemo(() => overviewFromText(projectText), [projectText])
+  const dirty = useMemo(() => {
+    try { return savedSignature !== JSON.stringify(JSON.parse(projectText)) }
+    catch { return true }
+  }, [projectText, savedSignature])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -181,39 +200,21 @@ function App() {
     }
   }, [attempt])
 
-  useEffect(() => {
-    const controller = new AbortController()
-    getExampleProject('starter', controller.signal)
-      .then((project) => {
-        setProjectText(JSON.stringify(project, null, 2))
-        setEditorProject(project)
-        setProjectLabel(exampleLabels.starter)
-        setSelectedPipeId(project.pipes[0]?.id ?? '')
-        setLookupId(project.project_id)
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return
-        setProjectLabel('예제를 불러오지 못했습니다')
-        setNotice({
-          kind: 'error',
-          title: '예제 불러오기 실패',
-          message: error instanceof Error ? error.message : '서버에 연결할 수 없습니다.',
-        })
-      })
-    return () => controller.abort()
-  }, [])
-
-  function applyProject(project: EngineeringProject, label: string) {
+  function applyProject(project: EngineeringProject) {
+    projectRevision.current++
     setProjectText(JSON.stringify(project, null, 2))
     setEditorProject(project)
     setPast([])
     setFuture([])
     setSelection(null)
-    setProjectLabel(label)
     setSelectedPipeId(project.pipes[0]?.id ?? '')
     setLookupId(project.project_id)
     setValidatedId(null)
     setRoute(null)
+    setSavedMeta(null)
+    setSavedSignature(null)
+    setEditorAction(null)
+    setFocusRuleId('')
   }
 
   function editedProject(): unknown {
@@ -226,13 +227,29 @@ function App() {
   }
 
   function applyHistory(history: History) {
+    projectRevision.current++
     setPast(history.past)
     setFuture(history.future)
     setProjectText(history.present)
-    setEditorProject(JSON.parse(history.present) as EngineeringProject)
+    const project = JSON.parse(history.present) as EngineeringProject
+    if (project.project_id !== editorProject?.project_id) {
+      const previousSaved = savedDocuments.current.get(project.project_id)
+      setSavedSignature(previousSaved?.signature ?? null)
+      setSavedMeta(previousSaved?.meta ?? null)
+    }
+    setEditorProject(project)
+    setSelectedPipeId((previous) => project.pipes.some((pipe) => pipe.id === previous) ? previous : project.pipes[0]?.id ?? '')
+    setSelection((previous) => {
+      if (!previous) return null
+      const exists = previous.kind === 'port' ? project.equipment.some((item) => item.ports.some((port) => port.id === previous.id))
+        : previous.kind === 'waypoint' ? !!findWaypoint(project, previous.id)
+        : previous.kind === 'pipe' ? project.pipes.some((pipe) => pipe.id === previous.id)
+        : (previous.kind === 'obstacle' ? project.obstacles : project.zones).some((item) => item.id === previous.id)
+      return exists ? previous : null
+    })
+    setFocusRuleId((previous) => project.constraints.some((rule) => rule.id === previous) ? previous : '')
     setValidatedId(null)
     setRoute(null)
-    setSavedMeta(null)
   }
 
   function commitEditorProject(project: EngineeringProject) {
@@ -240,7 +257,6 @@ function App() {
     const next = pushHistory(current, JSON.stringify(project, null, 2))
     if (next === current) return
     applyHistory(next)
-    setProjectLabel('도면 편집 중')
     setNotice(null)
   }
 
@@ -270,6 +286,84 @@ function App() {
     }
   }
 
+  function selectObject(next: Selection | null) {
+    setSelection(next)
+    if (next?.kind === 'pipe' && next.id !== selectedPipeId) { setSelectedPipeId(next.id); setRoute(null) }
+  }
+
+  function editInPlan(action: Omit<EditorAction, 'nonce'>) {
+    setCompanionView(null)
+    setActiveTab('2d')
+    setEditorAction({ ...action, nonce: Date.now() })
+  }
+
+  function createProject(name: string) {
+    try {
+      const blank = createBlankProject(`SYNTH-NEW-${Date.now()}`, name)
+      if (editorProject) commitEditorProject(blank)
+      else applyProject(blank)
+      setLookupId(blank.project_id)
+      setActiveTab('2d')
+      setCompanionView(null)
+      setSelection(null)
+      setFocusRuleId('')
+      setEditorAction(null)
+      setNewProjectOpen(false)
+      setNotice({ kind: 'success', title: '새 프로젝트 준비', message: `${blank.project_name} · 편집 내용은 JSON으로 자동 반영됩니다. 저장 전에도 계산할 수 있고, 프로젝트 저장으로 서버에 보존합니다.` })
+    } catch (error) { setNotice({ kind: 'error', title: '프로젝트 생성 실패', message: error instanceof Error ? error.message : '이름을 확인해 주세요.' }) }
+  }
+
+  function saveNamedProject(name: string) {
+    void run('save', async () => {
+      if (!editorProject) throw new Error('JSON 편집 탭에서 입력을 먼저 검증해 주세요.')
+      const named = renameProject(editorProject, name)
+      if (named.project_name !== editorProject.project_name) commitEditorProject(named)
+      const saved = await saveProject(named)
+      rememberSaved(named, { revision: saved.revision, updatedAt: saved.updated_at })
+      setLibraryRefresh((value) => value + 1)
+      setLookupId(saved.project_id)
+      setNotice({ kind: 'success', title: '서버에 저장됨', message: `${named.project_name} · 개정 ${saved.revision} · ${formatDate(saved.updated_at)}` })
+    })
+  }
+
+  function rememberSaved(project: EngineeringProject, meta: { revision: number; updatedAt: string }) {
+    const signature = JSON.stringify(project)
+    savedDocuments.current.set(project.project_id, { signature, meta })
+    setSavedSignature(signature)
+    setSavedMeta(meta)
+  }
+
+  function openSavedProject(id: string) {
+    void run('load', async () => {
+      const loaded = await loadProject(id)
+      applyProject(loaded.project)
+      rememberSaved(loaded.project, { revision: loaded.revision, updatedAt: loaded.updatedAt })
+      setActiveTab('2d')
+      setCompanionView(null)
+      setNotice({ kind: 'success', title: '프로젝트 불러오기 완료', message: `${loaded.project.project_name ?? loaded.project.project_id} · 개정 ${loaded.revision}` })
+    })
+  }
+
+  const viewer = editorProject && <Suspense fallback={<div className="viewer-loading">3D 보기 불러오는 중…</div>}><Viewer3D
+    project={editorProject} route={route?.pipe_id === selectedPipeId ? route : null} selectedPipeId={selectedPipeId}
+    selection={selection} onSelect={selectObject} focusRuleId={focusRuleId} onFocusRule={setFocusRuleId}
+    busy={operation !== null} solving={operation === 'solve'}
+    onSelectPipe={(pipeId) => selectObject({ kind: 'pipe', id: pipeId })}
+    onSolve={() => { void run('solve', async () => { setRoute(await solveRoute(editedProject(), selectedPipeId)) }) }}
+  /></Suspense>
+
+  const inspector = editorProject && <ObjectInspector
+    key={`${selection?.kind}:${selection?.id}`}
+    project={editorProject} selection={selection} selectedPipeId={selectedPipeId} busy={operation !== null}
+    onCommit={commitEditorProject} onSelect={selectObject}
+    onError={(message) => setNotice({ kind: 'error', title: '반영되지 않음', message })}
+    onAddPort={() => setActiveTab('2d')}
+    onAddWaypoint={() => editInPlan({ kind: 'add-waypoint' })}
+    onConnect={(portId) => editInPlan({ kind: 'connect', portId })}
+    onFocusRule={(id) => { setFocusRuleId(id); setActiveTab('2d'); setCompanionView(null) }}
+    onAddRule={(targetId) => editInPlan({ kind: 'add-rule', targetId })}
+  />
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -285,16 +379,21 @@ function App() {
       <main className="content">
         <section className="intro">
           <div>
-            <p className="eyebrow">SYNTHETIC ROUTE STUDY · P08</p>
-            <h1>도면에서 배치하고<br /><span>경로를 확인하세요.</span></h1>
-            <p className="lead">층별 2D 도면에서 합성 건물의 벽체·Zone·Port를 편집하고, 승인 규칙을 적용한 경로를 계산합니다.</p>
+            <h1>기기를 배치하고 배관을 연결하세요.</h1>
+            <p className="lead">기기 배치 → 연결점 두 개 선택 → 경로 계산. 객체를 클릭하면 오른쪽에서 수정할 수 있습니다.</p>
           </div>
           <div className="intro-aside">
             <div className="aside-icon">3D</div>
-            <strong>세계좌표 기반 2D 편집기</strong>
-            <span>도면 조작은 EngineeringProject JSON의 m 좌표로 저장되고, 3D 보기는 같은 JSON에서 다시 그려집니다.</span>
+            <strong>하나의 도면, 두 가지 보기</strong>
+            <span>2D에서 배치하고 3D에서 확인하세요. 도면의 치수 단위는 m입니다.</span>
           </div>
         </section>
+
+        <ProjectActions name={editorProject?.project_name ?? editorProject?.project_id ?? ''} dirty={dirty} busy={operation !== null} canSave={!!editorProject} onSave={saveNamedProject} onNew={() => setNewProjectOpen(true)} onRename={(name) => {
+          try { if (editorProject) commitEditorProject(renameProject(editorProject, name)) }
+          catch (error) { setNotice({ kind: 'error', title: '이름 변경 실패', message: error instanceof Error ? error.message : '프로젝트 이름을 확인해 주세요.' }) }
+        }} />
+        {newProjectOpen && <NewProjectDialog onClose={() => setNewProjectOpen(false)} onCreate={createProject} />}
 
         {connection.status === 'error' && (
           <div className="banner error" role="alert">
@@ -307,6 +406,19 @@ function App() {
           </div>
         )}
 
+        <nav className="workspace-nav" aria-label="작업 화면">
+          <div className="workspace-tabs" role="tablist" aria-label="작업 탭" onKeyDown={onTabKeyDown}>{([
+            ['2d', '2D 배치'], ['3d', '3D 보기'], ['project', '프로젝트'], ['results', '계산 결과'],
+          ] as const).map(([id, label]) => <button type="button" role="tab" id={`tab-${id}`} aria-controls={`view-${id}`} aria-selected={activeTab === id} tabIndex={activeTab === id ? 0 : -1} key={id} onClick={() => { setActiveTab(id); setCompanionView(null) }}>{label}</button>)}</div>
+          {(activeTab === '2d' || activeTab === '3d') && <button className="button-secondary" type="button" disabled={!editorProject} onClick={() => setCompanionView(activeTab === '2d' ? '3d' : '2d')}>↗ {activeTab === '2d' ? '3D' : '2D'} 보조 보기</button>}
+        </nav>
+
+        {notice && <div className={`banner ${notice.kind} editor-notice`} role={notice.kind === 'error' ? 'alert' : 'status'}>
+          <strong>{notice.title}</strong><span>{notice.message}</span>
+          {!!notice.details?.length && <ul className="issue-list">{notice.details.map((item, index) => <li key={index}>{item.location.join(' → ')}: {item.message}</li>)}</ul>}
+        </div>}
+
+        <div role="tabpanel" id="view-2d" aria-labelledby="tab-2d" hidden={activeTab !== '2d'}>
         {editorProject ? (
           <PlanEditor
             key={editorProject.project_id}
@@ -314,7 +426,10 @@ function App() {
             route={route?.pipe_id === selectedPipeId ? route : null}
             selectedPipeId={selectedPipeId}
             selection={selection}
-            onSelectionChange={setSelection}
+            onSelectionChange={(next) => {
+              setSelection(next)
+              if (next?.kind === 'pipe' && next.id !== selectedPipeId) { setSelectedPipeId(next.id); setRoute(null) }
+            }}
             focusRuleId={focusRuleId}
             onFocusRule={setFocusRuleId}
             busy={operation !== null}
@@ -329,68 +444,71 @@ function App() {
               })
             }}
             onSelectPipe={(pipeId) => { setSelectedPipeId(pipeId); setRoute(null) }}
+            solving={operation === 'solve'}
+            action={editorAction}
+            onSolve={() => { void run('solve', async () => { setRoute(await solveRoute(editedProject(), selectedPipeId)) }) }}
           />
         ) : <section className="panel editor-placeholder"><p className="step">02 / PLAN EDITOR</p><h2>도면 준비 중</h2><p>예제를 불러오거나 수정한 JSON을 검증하면 층별 배치도가 나타납니다.</p></section>}
+        </div>
 
-        {editorProject && (
-          <Suspense fallback={<section className="panel viewer3d"><div className="viewer-loading">3D 보기 불러오는 중…</div></section>}>
-            <Viewer3D
-              project={editorProject}
-              route={route?.pipe_id === selectedPipeId ? route : null}
-              selectedPipeId={selectedPipeId}
-              selection={selection}
-              onSelect={setSelection}
-              focusRuleId={focusRuleId}
-              onFocusRule={setFocusRuleId}
-            />
-          </Suspense>
-        )}
+        <div role="tabpanel" id="view-3d" aria-labelledby="tab-3d" hidden={activeTab !== '3d'}>
+          {activeTab === '3d' && editorProject ? <div className="three-workspace">{viewer}{inspector}</div> : !editorProject && <p className="panel">프로젝트 탭에서 JSON을 검증하면 3D를 볼 수 있습니다.</p>}
+        </div>
+        {companionView && editorProject && <Popup title={`${companionView.toUpperCase()} 보조 보기`} companion onClose={() => setCompanionView(null)}>
+          {companionView === '3d' ? viewer : <PlanEditor project={editorProject} route={route?.pipe_id === selectedPipeId ? route : null} selectedPipeId={selectedPipeId} selection={selection} onSelectionChange={selectObject} focusRuleId={focusRuleId} onFocusRule={setFocusRuleId} busy={operation !== null} canUndo={past.length > 0} canRedo={future.length > 0} onUndo={undoEditor} onRedo={redoEditor} onCommit={commitEditorProject} onApproveRule={(project, ruleId, reviewer) => { void run('approve', async () => commitEditorProject(await approveRule(project, ruleId, reviewer))) }} onSelectPipe={(id) => { setSelectedPipeId(id); setRoute(null) }} onSolve={() => { void run('solve', async () => setRoute(await solveRoute(editedProject(), selectedPipeId))) }} solving={operation === 'solve'} />}
+        </Popup>}
 
-        <section className="workspace" aria-label="프로젝트 작업대">
-          <div className="left-column">
+        <section className="workspace tab-workspace" aria-label="프로젝트 작업대" hidden={activeTab !== 'project' && activeTab !== 'results'}>
+          <div className="left-column" role="tabpanel" id="view-project" aria-labelledby="tab-project" hidden={activeTab !== 'project'}>
             <section className="panel project-panel">
               <div className="panel-heading">
                 <div><p className="step">01 / PROJECT</p><h2>프로젝트</h2></div>
-                <span className="soft-badge">{projectLabel}</span>
+                <span className="soft-badge">{dirty ? '저장되지 않은 변경 있음' : '저장됨'}</span>
               </div>
-              <p className="panel-description">서버의 합성 예제를 불러오거나 JSON을 수정한 뒤 검증하고 저장할 수 있습니다.</p>
+              <div className="inspector-tabs project-section-tabs" role="tablist" aria-label="프로젝트 관리 항목" onKeyDown={onTabKeyDown}>
+                <button type="button" role="tab" aria-selected={projectSection === 'storage'} tabIndex={projectSection === 'storage' ? 0 : -1} onClick={() => setProjectSection('storage')}>저장·불러오기</button>
+                <button type="button" role="tab" aria-selected={projectSection === 'json'} tabIndex={projectSection === 'json' ? 0 : -1} onClick={() => setProjectSection('json')}>JSON 편집</button>
+              </div>
+              <div hidden={projectSection !== 'storage'}>
+              <p className="panel-description">작업한 도면을 저장하거나 저장한 프로젝트·합성 예제를 불러옵니다.</p>
               <div className="button-row">
                 <select aria-label="합성 예제" value={example} disabled={operation !== null} onChange={(event) => setExample(event.target.value as ExampleProject)}>
                   {(Object.keys(exampleLabels) as ExampleProject[]).map((name) => <option key={name} value={name}>{exampleLabels[name]}</option>)}
                 </select>
                 <button type="button" className="button-secondary" disabled={operation !== null} onClick={() => run('demo', async () => {
-                  const project = await getExampleProject(example)
-                  applyProject(project, exampleLabels[example])
+                  const original = await getExampleProject(example)
+                  const project = copyExampleProject(original, `SYNTH-COPY-${Date.now()}`, `${exampleLabels[example]} 복사본`)
+                  applyProject(project)
                   setSavedMeta(null)
-                  setNotice({ kind: 'success', title: '예제 준비 완료', message: `${project.project_id} 프로젝트를 불러왔습니다.` })
+                  setActiveTab('2d')
+                  setCompanionView(null)
+                  setNotice({ kind: 'success', title: '예제 준비 완료', message: '예제의 작업 복사본을 열었습니다. 기기를 추가하고 저장하면 저장 목록에서 다시 열 수 있습니다. 예제 원본은 유지됩니다.' })
                 })}>예제 불러오기</button>
                 <button type="button" className="button-secondary" disabled={operation !== null || !projectText} onClick={() => run('save', async () => {
                   const saved = await saveProject(editedProject())
-                  setSavedMeta({ revision: saved.revision, updatedAt: saved.updated_at })
+                  rememberSaved(editedProject() as EngineeringProject, { revision: saved.revision, updatedAt: saved.updated_at })
+                  setLibraryRefresh((value) => value + 1)
                   setLookupId(saved.project_id)
                   setNotice({ kind: 'success', title: '서버에 저장됨', message: `${saved.project_id} · 개정 ${saved.revision} · ${formatDate(saved.updated_at)}` })
                 })}>서버에 저장</button>
               </div>
-              <div className="load-row">
+              <ProjectLibrary active={activeTab === 'project' && projectSection === 'storage'} refreshToken={libraryRefresh} currentId={editorProject?.project_id ?? ''} busy={operation !== null} onLoad={openSavedProject} />
+              <details className="inspector-details"><summary>프로젝트 ID로 직접 불러오기</summary><div className="load-row">
                 <label htmlFor="project-id">저장된 프로젝트 ID</label>
                 <div>
                   <input id="project-id" value={lookupId} disabled={operation !== null} onChange={(event) => setLookupId(event.target.value)} placeholder="예: SYNTH-DEMO-001" />
-                  <button type="button" className="button-secondary" disabled={operation !== null} onClick={() => run('load', async () => {
-                    if (!lookupId.trim()) throw new Error('불러올 프로젝트 ID를 입력해 주세요.')
-                    const loaded = await loadProject(lookupId.trim())
-                    applyProject(loaded.project, '서버에서 불러옴')
-                    setSavedMeta({ revision: loaded.revision, updatedAt: loaded.updatedAt })
-                    setNotice({ kind: 'success', title: '프로젝트 불러오기 완료', message: `${loaded.project.project_id} · 개정 ${loaded.revision}` })
-                  })}>불러오기</button>
+                  <button type="button" className="button-secondary" disabled={operation !== null || !lookupId.trim()} onClick={() => openSavedProject(lookupId.trim())}>불러오기</button>
                 </div>
-              </div>
+              </div></details>
               <div className="overview-grid" aria-label="프로젝트 요약">
-                <div><span>프로젝트 ID</span><strong>{overview?.id ?? '—'}</strong></div>
+                <div><span>현재 프로젝트 이름</span><strong>{editorProject?.project_name ?? overview?.id ?? '—'}</strong></div>
                 <div><span>스키마</span><strong>{overview?.schemaVersion ?? '—'}</strong></div>
                 <div><span>장애물 / Zone</span><strong>{overview ? `${overview.obstacles} / ${overview.zones}` : '—'}</strong></div>
                 <div><span>배관 / 규칙</span><strong>{overview ? `${overview.pipeIds.length} / ${overview.constraints}` : '—'}</strong></div>
               </div>
-              {savedMeta && <p className="saved-meta">저장 개정 {savedMeta.revision} · {formatDate(savedMeta.updatedAt)}</p>}
+              {savedMeta && <p className="saved-meta">{dirty ? '마지막 저장' : '저장'} 개정 {savedMeta.revision} · {formatDate(savedMeta.updatedAt)}{dirty ? ' · 현재 수정은 아직 저장되지 않았습니다.' : ''}</p>}
+              </div>
+              <div hidden={projectSection !== 'json'}>
               <label htmlFor="project-json" className="field-label">EngineeringProject JSON <span>세계좌표 단위 m · z 수직</span></label>
               <textarea
                 id="project-json"
@@ -398,6 +516,7 @@ function App() {
                 disabled={operation !== null}
                 value={projectText}
                 onChange={(event) => {
+                  projectRevision.current++
                   const nextText = event.target.value
                   const nextPipeIds = overviewFromText(nextText)?.pipeIds ?? []
                   setProjectText(nextText)
@@ -407,13 +526,12 @@ function App() {
                   if (!nextPipeIds.includes(selectedPipeId)) {
                     setSelectedPipeId(nextPipeIds[0] ?? '')
                   }
-                  setProjectLabel('편집 중')
                   setValidatedId(null)
                   setRoute(null)
                   setSavedMeta(null)
                   setNotice(null)
                 }}
-                placeholder="백엔드를 실행하면 합성 예제 JSON이 자동으로 나타납니다."
+                placeholder="프로젝트 JSON을 입력하고 검증하세요."
               />
               <div className="validation-row">
                 <button type="button" className="button-secondary" disabled={operation !== null || !projectText} onClick={() => run('validate', async () => {
@@ -424,10 +542,11 @@ function App() {
                 })}>JSON 검증</button>
                 <span>{validatedId ? `검증 완료 · ${validatedId}` : '변경한 JSON은 검증 후 실행하세요.'}</span>
               </div>
+              </div>
             </section>
           </div>
 
-          <div className="right-column">
+          <div className="right-column" role="tabpanel" id="view-results" aria-labelledby="tab-results" hidden={activeTab !== 'results'}>
             <section className="panel run-panel">
               <div className="panel-heading"><div><p className="step">04 / ROUTE</p><h2>경로 탐색</h2></div><span className="soft-badge">3D A* + 독립 검증</span></div>
               <p className="panel-description">선택한 배관에 승인된 규칙을 적용하고 경로를 계산합니다.</p>
@@ -444,13 +563,6 @@ function App() {
               <p className="run-hint">격자 간격 {overview?.resolution ?? '—'} m · 승인되지 않은 규칙은 실행되지 않습니다.</p>
             </section>
 
-            {notice && (
-              <div className={`banner ${notice.kind}`} role={notice.kind === 'error' ? 'alert' : 'status'}>
-                <strong>{notice.title}</strong><span>{notice.message}</span>
-                {!!notice.details?.length && <ul className="issue-list">{notice.details.map((item, index) => <li key={`${item.location.join('.')}-${index}`}><code>{item.location.join(' → ')}</code> {item.message}</li>)}</ul>}
-              </div>
-            )}
-
             <section className="panel result-panel" aria-live="polite">
               <div className="panel-heading"><div><p className="step">05 / RESULT</p><h2>계산 결과</h2></div>{route && <span className={`result-chip ${route.status === 'SUCCESS' ? 'good' : 'bad'}`}>{route.status}</span>}</div>
               {!route ? (
@@ -463,7 +575,7 @@ function App() {
                 <>
                   <div className={`result-message ${route.status === 'SUCCESS' ? 'good' : 'bad'}`}>
                     <strong>{statusText[route.status]}</strong>
-                    <span>{statusHelp[route.status]}</span>
+                    <span>{route.status !== 'SUCCESS' && editorProject ? routeFailureText(editorProject, route) : statusHelp[route.status]}</span>
                     {route.message && routeNote(route.message) && <small className="route-note">{routeNote(route.message)}</small>}
                     {route.message && <small>상세: {route.message}</small>}
                   </div>

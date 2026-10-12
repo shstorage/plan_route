@@ -61,7 +61,9 @@ export interface Constraint {
 export interface EngineeringProject {
   schema_version: string
   project_id: string
+  project_name?: string | null
   study_type: string
+  unit_system: string
   coordinate_frame: { name: string; unit: string; up_axis: string; origin_m: Point3 }
   building: {
     bounds_m: Aabb
@@ -72,7 +74,11 @@ export interface EngineeringProject {
   equipment: Equipment[]
   pipes: Pipe[]
   constraints: Constraint[]
-  routing_config: { grid_resolution_m: number }
+  routing_config: {
+    grid_resolution_m: number
+    cost_weights: { length_per_m: number; bend_per_event: number; preferred_zone_factor: number }
+    search_limits: { max_expansions: number }
+  }
 }
 
 export interface Waypoint {
@@ -118,6 +124,21 @@ export interface SavedProjectInfo {
   revision: number
   updated_at: string
   document_hash: string
+}
+
+export interface ProjectSummary {
+  project_id: string
+  project_name: string | null
+  schema_version: string
+  revision: number
+  updated_at: string
+  equipment_count: number
+  pipe_count: number
+}
+
+export interface ProjectList {
+  projects: ProjectSummary[]
+  issues: Array<{ filename: string; message: string }>
 }
 
 export interface RouteViolation {
@@ -275,6 +296,10 @@ export async function validateProject(project: unknown): Promise<ProjectValidati
 
 export async function saveProject(project: unknown): Promise<SavedProjectInfo> {
   return requestJson('/api/projects/save', jsonRequest(project))
+}
+
+export async function listProjects(signal?: AbortSignal): Promise<ProjectList> {
+  return requestJson('/api/projects', { signal })
 }
 
 export async function loadProject(projectId: string): Promise<{

@@ -2,7 +2,7 @@ import type { Aabb, Constraint, EngineeringProject, Pipe, Point3, Port, Waypoint
 import { snapMeters } from './coordinates.ts'
 
 export type BoxKind = 'obstacle' | 'zone'
-export type Selection = { kind: BoxKind | 'port' | 'waypoint'; id: string }
+export type Selection = { kind: BoxKind | 'port' | 'waypoint' | 'pipe'; id: string }
 export type Corner = 'nw' | 'ne' | 'sw' | 'se'
 export type Floor = EngineeringProject['building']['floors'][number]
 
@@ -39,8 +39,19 @@ function boxFor(project: EngineeringProject, kind: BoxKind, id: string): Aabb {
 export function updateBox(project: EngineeringProject, kind: BoxKind, id: string, shape: Aabb): EngineeringProject {
   checkBox(project, shape)
   if (kind === 'obstacle') {
-    if (!project.obstacles.some((item) => item.id === id)) throw new Error(`장애물 ${id}가 없습니다.`)
-    return { ...project, obstacles: project.obstacles.map((item) => item.id === id ? { ...item, shape } : item) }
+    const old = project.obstacles.find((item) => item.id === id)?.shape
+    if (!old) throw new Error(`장애물 ${id}가 없습니다.`)
+    const translation = shape.min_m.map((value, axis) => value - old.min_m[axis]) as Point3
+    const translated = shape.max_m.every((value, axis) => Math.abs(value - old.max_m[axis] - translation[axis]) < 1e-9)
+    const equipment = project.equipment.map((item) => {
+      if (item.geometry_ref !== id || !translated) return item
+      return { ...item, ports: item.ports.map((port) => {
+        const position = port.position_m.map((value, axis) => value + translation[axis]) as Point3
+        checkPoint(project, position)
+        return { ...port, position_m: position }
+      }) }
+    })
+    return { ...project, equipment, obstacles: project.obstacles.map((item) => item.id === id ? { ...item, shape } : item) }
   }
   if (!project.zones.some((item) => item.id === id)) throw new Error(`Zone ${id}이 없습니다.`)
   return { ...project, zones: project.zones.map((item) => item.id === id ? { ...item, shape } : item) }
@@ -131,6 +142,101 @@ function nextId(project: EngineeringProject, prefix: string): string {
   return `${prefix}-${String(number).padStart(3, '0')}`
 }
 
+export const EQUIPMENT_KINDS = {
+  storage_tank: '탱크', pump: '펌프', heat_exchanger: '열교환기', generic_equipment: '일반 기기',
+} as const
+export type EquipmentKind = keyof typeof EQUIPMENT_KINDS
+
+export function renameProject(project: EngineeringProject, name: string): EngineeringProject {
+  const trimmed = name.trim()
+  if (!trimmed || [...trimmed].length > 100) throw new Error('프로젝트 이름은 1~100자로 입력해 주세요.')
+  return { ...project, project_name: trimmed }
+}
+
+export function copyExampleProject(project: EngineeringProject, id: string, name: string): EngineeringProject {
+  if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(id) || id === project.project_id) throw new Error('예제 복사본에는 새로운 프로젝트 ID가 필요합니다.')
+  return renameProject({ ...project, project_id: id }, name)
+}
+
+export function createBlankProject(projectId = 'SYNTH-NEW-001', name?: string): EngineeringProject {
+  if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(projectId)) throw new Error('프로젝트 ID 형식이 올바르지 않습니다.')
+  const project: EngineeringProject = {
+    schema_version: '1.0.0', project_id: projectId, study_type: 'synthetic_benchmark', unit_system: 'SI',
+    coordinate_frame: { name: 'world', unit: 'm', up_axis: 'z', origin_m: [0, 0, 0] },
+    building: { bounds_m: { type: 'aabb', min_m: [0, 0, 0], max_m: [20, 12, 6] }, floors: [{ id: 'L1', z_min_m: 0, z_max_m: 6 }] },
+    obstacles: [], zones: [], equipment: [], pipes: [], constraints: [],
+    routing_config: { grid_resolution_m: 0.5, cost_weights: { length_per_m: 1, bend_per_event: 2, preferred_zone_factor: 1 }, search_limits: { max_expansions: 200000 } },
+  }
+  return name === undefined ? project : renameProject(project, name)
+}
+
+export function createEquipment(
+  project: EngineeringProject, kind: EquipmentKind, at: Point3, floor: Floor, snapStep: number | null,
+): { project: EngineeringProject; selection: Selection; equipmentId: string } {
+  if (!(kind in EQUIPMENT_KINDS)) throw new Error('기기 종류를 선택해 주세요.')
+  const grid = project.routing_config.grid_resolution_m
+  const origin = project.coordinate_frame.origin_m
+  const x = snapStep ? snapMeters(at[0], snapStep, origin[0]) : at[0]
+  const y = snapStep ? snapMeters(at[1], snapStep, origin[1]) : at[1]
+  const dimensions = kind === 'storage_tank' ? [3, 3, 3] : kind === 'heat_exchanger' ? [3, 2, 2] : [2, 1.5, 1.5]
+  const shape: Aabb = { type: 'aabb', min_m: [x - dimensions[0] / 2, y - dimensions[1] / 2, floor.z_min_m], max_m: [x + dimensions[0] / 2, y + dimensions[1] / 2, floor.z_min_m + Math.min(dimensions[2], floor.z_max_m - floor.z_min_m)] }
+  checkBox(project, shape)
+  const centre = (value: number, axis: number) => project.building.bounds_m.min_m[axis] + (Math.floor((value - project.building.bounds_m.min_m[axis]) / grid) + 0.5) * grid
+  // Conservative whole-cell masks need external connection points clear of the body.
+  const lowX = project.building.bounds_m.min_m[0]
+  const left = lowX + (Math.floor((shape.min_m[0] - lowX) / grid) - 1.5) * grid
+  const right = lowX + (Math.ceil((shape.max_m[0] - lowX) / grid) + 1.5) * grid
+  const z = centre(floor.z_min_m + Math.min(1, (floor.z_max_m - floor.z_min_m) / 2), 2)
+  const ports: Port[] = [
+    { id: nextId(project, 'PORT'), position_m: [left, centre(y, 1), z], orientation: '-x' },
+    { id: '', position_m: [right, centre(y, 1), z], orientation: '+x' },
+  ]
+  ports.forEach((port) => checkPoint(project, port.position_m))
+  if (z < floor.z_min_m || z > floor.z_max_m) throw new Error('층 높이와 격자 간격을 조정해 주세요.')
+  const id = nextId(project, 'EQ')
+  const bodyId = nextId(project, 'BODY')
+  const withFirstPort = { ...project, equipment: [...project.equipment, { id, kind, geometry_ref: bodyId, ports: [ports[0]] }] }
+  ports[1].id = nextId(withFirstPort, 'PORT')
+  return {
+    project: { ...withFirstPort, equipment: [...project.equipment, { id, kind, geometry_ref: bodyId, ports }], obstacles: [...project.obstacles, { id: bodyId, kind: 'equipment_body', shape }] },
+    selection: { kind: 'obstacle', id: bodyId }, equipmentId: id,
+  }
+}
+
+export function changeEquipmentKind(project: EngineeringProject, id: string, kind: EquipmentKind): EngineeringProject {
+  if (!(kind in EQUIPMENT_KINDS)) throw new Error('기기 종류가 올바르지 않습니다.')
+  if (!project.equipment.some((item) => item.id === id)) throw new Error(`기기 ${id}가 없습니다.`)
+  return { ...project, equipment: project.equipment.map((item) => item.id === id ? { ...item, kind } : item) }
+}
+
+export function deleteEquipment(project: EngineeringProject, id: string): EngineeringProject {
+  const item = project.equipment.find((entry) => entry.id === id)
+  if (!item) throw new Error(`기기 ${id}가 없습니다.`)
+  const portIds = new Set(item.ports.map((port) => port.id))
+  const connected = project.pipes.filter((pipe) => portIds.has(pipe.from_port_id) || portIds.has(pipe.to_port_id))
+  if (connected.length) throw new Error(`배관 ${connected.map((pipe) => pipe.id).join(', ')}이(가) 연결되어 있습니다. 배관을 삭제하거나 접속 Port를 변경한 뒤 기기를 삭제하세요.`)
+  const shared = project.equipment.some((other) => other.id !== id && other.geometry_ref === item.geometry_ref)
+  const removeBody = item.geometry_ref && !shared
+  const rules = removeBody ? project.constraints.filter((rule) => rule.scope.target_ids.includes(item.geometry_ref!)) : []
+  if (rules.length) throw new Error(`기기 몸체가 규칙 ${rules.map((rule) => rule.id).join(', ')}의 대상입니다. 먼저 규칙을 정리하세요.`)
+  return { ...project, equipment: project.equipment.filter((entry) => entry.id !== id), obstacles: removeBody ? project.obstacles.filter((body) => body.id !== item.geometry_ref) : project.obstacles }
+}
+
+export function createPipe(project: EngineeringProject, fromId: string, toId: string): { project: EngineeringProject; pipeId: string } {
+  const ports = new Set(project.equipment.flatMap((item) => item.ports.map((port) => port.id)))
+  if (!ports.has(fromId) || !ports.has(toId)) throw new Error('시작·도착 Port를 선택해 주세요.')
+  if (fromId === toId) throw new Error('배관의 양 끝은 서로 다른 Port여야 합니다.')
+  const id = nextId(project, 'PIPE')
+  return { project: { ...project, pipes: [...project.pipes, { id, from_port_id: fromId, to_port_id: toId, outer_diameter_m: 0.1, insulation_thickness_m: 0.025, clearance_margin_m: 0, waypoints: [] }] }, pipeId: id }
+}
+
+export function deletePipe(project: EngineeringProject, id: string): EngineeringProject {
+  if (!project.pipes.some((pipe) => pipe.id === id)) throw new Error(`배관 ${id}가 없습니다.`)
+  const rules = project.constraints.filter((rule) => rule.scope.pipe_ids.includes(id))
+  if (rules.length) throw new Error(`배관이 규칙 ${rules.map((rule) => rule.id).join(', ')}에서 참조됩니다. 먼저 규칙에서 이 배관을 제외하거나 규칙을 삭제하세요.`)
+  return { ...project, pipes: project.pipes.filter((pipe) => pipe.id !== id) }
+}
+
 export function createBox(
   project: EngineeringProject, kind: BoxKind, at: Point3, floor: Floor, snapStep: number | null,
 ): { project: EngineeringProject; selection: Selection } {
@@ -185,6 +291,7 @@ export function defaultPortHeight(project: EngineeringProject, floor: Floor): nu
 }
 
 export function deleteObject(project: EngineeringProject, selection: Selection): EngineeringProject {
+  if (selection.kind === 'pipe') return deletePipe(project, selection.id)
   if (selection.kind === 'waypoint') return removeWaypoint(project, selection.id)
   if (selection.kind === 'port') {
     const owner = project.equipment.find((item) => item.ports.some((port) => port.id === selection.id))
@@ -198,6 +305,9 @@ export function deleteObject(project: EngineeringProject, selection: Selection):
     }
   }
   boxFor(project, selection.kind, selection.id)
+  if (selection.kind === 'obstacle' && project.equipment.some((item) => item.geometry_ref === selection.id)) {
+    throw new Error('기기 몸체는 단독 삭제할 수 없습니다. 기기를 선택하고 속성에서 기기 삭제를 눌러 주세요.')
+  }
   const rules = project.constraints.filter((rule) => rule.scope.target_ids.includes(selection.id))
   if (rules.length) throw new Error(`규칙 ${rules.map((rule) => rule.id).join(', ')}이(가) 대상으로 쓰는 객체는 삭제할 수 없습니다. 먼저 규칙 대상을 바꿔 주세요.`)
   return selection.kind === 'obstacle'
@@ -310,10 +420,18 @@ export function createPort(
     snapStep ? snapMeters(at[1], snapStep, origin[1]) : at[1],
     defaultPortHeight(project, floor),
   ]
+  return addEquipmentPort(project, equipmentId, position, '+x')
+}
+
+/** An explicit nozzle/connection point uses world coordinates, in any view. */
+export function addEquipmentPort(
+  project: EngineeringProject, equipmentId: string, position: Point3, orientation: Port['orientation'],
+): { project: EngineeringProject; selection: Selection } {
   checkPoint(project, position)
   if (!project.equipment.some((item) => item.id === equipmentId)) throw new Error('Port 소유 장비를 선택해 주세요.')
+  if (!['+x', '-x', '+y', '-y', '+z', '-z'].includes(orientation)) throw new Error('연결점 방향을 확인해 주세요.')
   const id = nextId(project, 'PORT')
-  const port: Port = { id, position_m: position, orientation: '+x' }
+  const port: Port = { id, position_m: [...position], orientation }
   return {
     project: { ...project, equipment: project.equipment.map((item) => item.id === equipmentId ? { ...item, ports: [...item.ports, port] } : item) },
     selection: { kind: 'port', id },
@@ -539,6 +657,10 @@ export function routeSegmentsOnFloor(points: Point3[], floor: Floor): Array<{ in
 /** Floors on which a selected object is drawn in the plan (z range intersects the storey). */
 export function floorsShowing(project: EngineeringProject, selection: Selection): string[] {
   const floors = project.building.floors
+  if (selection.kind === 'pipe') {
+    const points = pipeConnectionPoints(project, selection.id)
+    return floors.filter((floor) => routeSegmentsOnFloor(points, floor).length > 0).map((floor) => floor.id)
+  }
   if (selection.kind === 'port' || selection.kind === 'waypoint') {
     const point = selection.kind === 'port'
       ? project.equipment.flatMap((item) => item.ports).find((item) => item.id === selection.id)?.position_m
@@ -565,6 +687,49 @@ export function findWaypoint(project: EngineeringProject, id: string): { pipe: P
     if (index >= 0) return { pipe, waypoint: pipe.waypoints![index], index }
   }
   return null
+}
+
+/** Human-readable labels are derived; canonical IDs in JSON never change. */
+export function selectionLabel(project: EngineeringProject, selection: Selection): string {
+  if (selection.kind === 'obstacle') {
+    const equipment = project.equipment.find((item) => item.geometry_ref === selection.id)
+    if (equipment) return equipmentLabel(project, equipment.id)
+    return `벽/장애물 ${project.obstacles.findIndex((item) => item.id === selection.id) + 1}`
+  }
+  if (selection.kind === 'zone') return `제약 구역 ${project.zones.findIndex((item) => item.id === selection.id) + 1}`
+  if (selection.kind === 'pipe') return `배관 ${project.pipes.findIndex((pipe) => pipe.id === selection.id) + 1}`
+  if (selection.kind === 'waypoint') return `경유점 ${(findWaypoint(project, selection.id)?.index ?? 0) + 1}`
+  const owner = project.equipment.find((item) => item.ports.some((port) => port.id === selection.id))
+  return owner ? `${equipmentLabel(project, owner.id)} · 연결점 ${owner.ports.findIndex((port) => port.id === selection.id) + 1}` : '연결점'
+}
+
+export function equipmentLabel(project: EngineeringProject, id: string): string {
+  const item = project.equipment.find((entry) => entry.id === id)
+  if (!item) return '기기'
+  const sameKind = project.equipment.filter((entry) => entry.kind === item.kind)
+  return `${EQUIPMENT_KINDS[item.kind as EquipmentKind] ?? '기기'} ${sameKind.findIndex((entry) => entry.id === id) + 1}`
+}
+
+/** Schematic connection only. This must never be passed to the route validator as a computed path. */
+export function pipeConnectionPoints(project: EngineeringProject, pipeId: string): Point3[] {
+  const pipe = project.pipes.find((item) => item.id === pipeId)
+  if (!pipe) return []
+  const ports = project.equipment.flatMap((item) => item.ports)
+  const start = ports.find((port) => port.id === pipe.from_port_id)
+  const end = ports.find((port) => port.id === pipe.to_port_id)
+  if (!start || !end) return []
+  return [start.position_m, ...(pipe.waypoints ?? []).map((waypoint) => waypoint.position_m), end.position_m]
+}
+
+export function pickConnection(project: EngineeringProject, startPortId: string | null, clickedPortId: string): {
+  startPortId: string | null; project: EngineeringProject; pipeId: string | null
+} {
+  const ports = project.equipment.flatMap((item) => item.ports)
+  if (!ports.some((port) => port.id === clickedPortId)) throw new Error('선택한 연결점이 없습니다.')
+  if (startPortId === null) return { startPortId: clickedPortId, project, pipeId: null }
+  if (!ports.some((port) => port.id === startPortId)) throw new Error('시작 연결점이 삭제되었습니다. 연결을 다시 시작하세요.')
+  const created = createPipe(project, startPortId, clickedPortId)
+  return { startPortId: null, project: created.project, pipeId: created.pipeId }
 }
 
 function withWaypoints(project: EngineeringProject, pipeId: string, waypoints: Waypoint[]): EngineeringProject {

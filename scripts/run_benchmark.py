@@ -1,4 +1,4 @@
-"""Execute P10A/P10B, preserving every run. Uses the uv-installed package."""
+"""Execute P10A/P10B/P10C, preserving every run in the uv-installed package."""
 
 import argparse
 import json
@@ -9,7 +9,9 @@ from plan_route.services.benchmark import ROOT, run_benchmark
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Synthetic pilot/comparison benchmark")
+    parser = argparse.ArgumentParser(
+        description="Synthetic pilot/comparison/changes benchmark"
+    )
     parser.add_argument("--config", type=Path, default=ROOT / "benchmarks/pilot.json")
     parser.add_argument(
         "--seed",

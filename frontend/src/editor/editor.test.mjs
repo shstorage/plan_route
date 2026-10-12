@@ -10,12 +10,246 @@ import {
   connectPort, createBox, createPort, createRule, defaultPortHeight, deleteObject, drawBox,
   gridCellCount, metresToMillimetres, millimetresToMetres, moveBox, pipeEnvelopeDiameter,
   resizeBox, routeSegmentsOnFloor, updateDomain, updatePipe, updatePort, updateRule,
+  changeEquipmentKind, createBlankProject, createEquipment, createPipe, deleteEquipment, deletePipe,
+  addEquipmentPort, copyExampleProject, floorsShowing, pickConnection, pipeConnectionPoints, renameProject, selectionLabel,
 } from './model.ts'
 import { pushHistory, redoHistory, startHistory, undoHistory } from './history.ts'
+import { failedPortId, routeFailureText } from './routeFeedback.ts'
 
 const fixture = new URL('../../../src/plan_route/fixtures/demo_project.json', import.meta.url)
 // The fixture lives at the repository root, outside frontend/src/editor.
 const project = () => JSON.parse(readFileSync(fileURLToPath(fixture), 'utf8'))
+
+function assembly() {
+  const blank = createBlankProject()
+  const first = createEquipment(blank, 'pump', [5, 6, 0], blank.building.floors[0], 0.5)
+  const second = createEquipment(first.project, 'heat_exchanger', [15, 6, 0], blank.building.floors[0], 0.5)
+  return second.project
+}
+
+test('example working copies use independent IDs while preserving all engineering references', () => {
+  const original = project()
+  const before = JSON.stringify(original)
+  const copy = copyExampleProject(original, 'SYNTH-COPY-TEST', '예제 수정본')
+  assert.equal(copy.project_id, 'SYNTH-COPY-TEST')
+  assert.equal(copy.project_name, '예제 수정본')
+  assert.deepEqual(copy.equipment, original.equipment)
+  assert.deepEqual(copy.pipes, original.pipes)
+  assert.deepEqual(copy.constraints, original.constraints)
+  assert.throws(() => copyExampleProject(original, original.project_id, 'same'), /새로운/)
+  assert.equal(JSON.stringify(original), before)
+})
+
+test('Korean display names are canonical JSON metadata and never replace stable storage IDs', () => {
+  const blank = createBlankProject('PROJECT-NAMED', '  배관 연구 1  ')
+  assert.equal(blank.project_name, '배관 연구 1')
+  const renamed = renameProject(blank, '다른 이름')
+  assert.equal(renamed.project_id, 'PROJECT-NAMED')
+  assert.equal(renamed.project_name, '다른 이름')
+  assert.equal(blank.project_name, '배관 연구 1')
+  assert.throws(() => renameProject(blank, '  '), /이름/)
+  assert.throws(() => renameProject(blank, '가'.repeat(101)), /100/)
+  assert.equal(createBlankProject().project_name, undefined, 'unnamed legacy payload is preserved')
+})
+
+test('compiler endpoint errors identify the exact port with an actionable display label', () => {
+  const built = assembly()
+  const id = built.equipment[0].ports[1].id
+  const report = { status: 'INVALID_INPUT', message: `port ${id} snaps to a physical blocked cell` }
+  assert.equal(failedPortId(built, report), id)
+  const text = routeFailureText(built, report)
+  assert.match(text, /펌프 1 · 연결점 2/)
+  assert.match(text, /격자/)
+  assert.match(text, /저장 여부와는 관계없습니다/)
+  assert.equal(failedPortId(built, { ...report, status: 'NO_PATH' }), null)
+  assert.equal(failedPortId(built, { ...report, message: 'port MISSING snaps to a physical blocked cell' }), null)
+  assert.equal(failedPortId(built, { ...report, message: 'unknown pipe ID: PIPE-001' }), null)
+  assert.match(routeFailureText(built, { ...report, message: `port ${id}: point_m is outside grid bounds` }), /경계 안쪽/)
+  assert.match(routeFailureText(built, { status: 'SEARCH_LIMIT_REACHED', message: null }), /경로가 없다는 뜻은 아닙니다/)
+})
+
+test('equipment supports multiple explicit nozzles with individual height and direction', () => {
+  const built = assembly()
+  const owner = built.equipment[0].id
+  const before = JSON.stringify(built)
+  const position = [4.25, 7.25, 2.25]
+  const added = addEquipmentPort(built, owner, position, '+z')
+  const port = added.project.equipment[0].ports[2]
+  assert.equal(port.id, added.selection.id)
+  assert.deepEqual(port.position_m, position)
+  assert.equal(port.orientation, '+z')
+  position[0] = 18
+  assert.equal(port.position_m[0], 4.25, 'caller array does not mutate stored point')
+  assert.equal(JSON.stringify(built), before)
+  const deleted = deleteObject(added.project, added.selection)
+  assert.equal(deleted.equipment[0].ports.length, 2)
+  assert.equal(deleted.equipment[1].ports.length, 2)
+})
+
+test('explicit nozzle creation rejects missing equipment, outside coordinates, and invalid directions atomically', () => {
+  const built = assembly()
+  const before = JSON.stringify(built)
+  assert.throws(() => addEquipmentPort(built, 'missing', [4, 6, 1], '+x'), /소유/)
+  assert.throws(() => addEquipmentPort(built, built.equipment[0].id, [4, 6, 7], '+x'), /건물/)
+  assert.throws(() => addEquipmentPort(built, built.equipment[0].id, [NaN, 6, 1], '+x'), /유한/)
+  assert.throws(() => addEquipmentPort(built, built.equipment[0].id, [4, 6, 1], 'sideways'), /방향/)
+  assert.equal(JSON.stringify(built), before)
+})
+
+test('two connection clicks create a canonical pipe and first click never changes the document', () => {
+  const built = assembly()
+  const source = built.equipment[0].ports[1].id
+  const target = built.equipment[1].ports[0].id
+  const first = pickConnection(built, null, source)
+  assert.equal(first.project, built)
+  assert.equal(first.pipeId, null)
+  assert.equal(first.startPortId, source)
+  const second = pickConnection(built, first.startPortId, target)
+  assert.equal(second.startPortId, null)
+  assert.equal(second.project.pipes[0].from_port_id, source)
+  assert.equal(second.project.pipes[0].to_port_id, target)
+  assert.equal(built.pipes.length, 0)
+})
+
+test('connection retries reject the same point and stale or unknown references', () => {
+  const built = assembly(), id = built.equipment[0].ports[0].id
+  assert.throws(() => pickConnection(built, id, id), /서로 다른/)
+  assert.throws(() => pickConnection(built, null, 'MISSING'), /없습니다/)
+  assert.throws(() => pickConnection(built, 'MISSING', id), /삭제/)
+  const recovered = pickConnection(built, null, id)
+  assert.equal(recovered.startPortId, id)
+})
+
+test('schematic lines follow ports and ordered waypoints without mutating route semantics', () => {
+  const built = assembly()
+  const { project: connected, pipeId } = createPipe(built, built.equipment[0].ports[1].id, built.equipment[1].ports[0].id)
+  const points = pipeConnectionPoints(connected, pipeId)
+  assert.deepEqual(points, [built.equipment[0].ports[1].position_m, built.equipment[1].ports[0].position_m])
+  const waypoint = { id: 'VIA', position_m: [10, 8, 1.25] }
+  const via = { ...connected, pipes: [{ ...connected.pipes[0], waypoints: [waypoint] }] }
+  assert.deepEqual(pipeConnectionPoints(via, pipeId), [points[0], waypoint.position_m, points[1]])
+  assert.deepEqual(floorsShowing(via, { kind: 'pipe', id: pipeId }), ['L1'])
+  assert.deepEqual(pipeConnectionPoints(via, 'MISSING'), [])
+  assert.deepEqual(deleteObject(connected, { kind: 'pipe', id: pipeId }), built)
+  assert.equal(via.pipes[0].from_port_id, connected.pipes[0].from_port_id)
+})
+
+test('simple display labels keep IDs and classifications in the document unchanged', () => {
+  const built = assembly()
+  const before = JSON.stringify(built)
+  assert.equal(selectionLabel(built, { kind: 'obstacle', id: built.equipment[0].geometry_ref }), '펌프 1')
+  assert.equal(selectionLabel(built, { kind: 'port', id: built.equipment[0].ports[1].id }), '펌프 1 · 연결점 2')
+  assert.equal(JSON.stringify(built), before)
+})
+
+test('blank project has a complete SI contract and contains no sample objects', () => {
+  const blank = createBlankProject()
+  assert.equal(blank.unit_system, 'SI')
+  assert.equal(blank.coordinate_frame.up_axis, 'z')
+  for (const key of ['obstacles', 'zones', 'equipment', 'pipes', 'constraints']) assert.deepEqual(blank[key], [])
+  assert.equal(blank.routing_config.cost_weights.length_per_m, 1)
+  assert.throws(() => createBlankProject('../bad'), /ID/)
+  const a = createBlankProject()
+  a.building.bounds_m.min_m[0] = 99
+  assert.equal(createBlankProject().building.bounds_m.min_m[0], 0)
+})
+
+test('equipment creates uniquely identified body and owned external ports for each supported kind', () => {
+  for (const kind of ['pump', 'storage_tank', 'heat_exchanger', 'generic_equipment']) {
+    const blank = createBlankProject()
+    const created = createEquipment(blank, kind, [5, 6, 0], blank.building.floors[0], 0.5)
+    assert.equal(blank.equipment.length, 0)
+    const item = created.project.equipment[0]
+    const body = created.project.obstacles[0]
+    assert.equal(item.geometry_ref, body.id)
+    assert.equal(item.ports.length, 2)
+    assert.equal(item.ports[0].orientation, '-x')
+    assert.equal(item.ports[1].orientation, '+x')
+    assert.ok(item.ports[0].position_m[0] < body.shape.min_m[0])
+    assert.ok(item.ports[1].position_m[0] > body.shape.max_m[0])
+    assert.equal(new Set([item.id, body.id, ...item.ports.map((port) => port.id)]).size, 4)
+  }
+  const built = assembly()
+  assert.equal(new Set(built.equipment.flatMap((item) => [item.id, item.geometry_ref, ...item.ports.map((port) => port.id)])).size, 8)
+  assert.throws(() => createEquipment(createBlankProject(), 'pump', [0, 0, 0], createBlankProject().building.floors[0], 0.5), /경계|내부/)
+  assert.throws(() => createEquipment(createBlankProject(), 'bad', [5, 6, 0], createBlankProject().building.floors[0], 0.5), /종류/)
+})
+
+test('equipment translation moves owned ports atomically, preserves orientations and rejects boundary exits', () => {
+  const built = assembly()
+  const body = built.obstacles[0]
+  const next = moveBox(built, 'obstacle', body.id, body.shape.min_m[0] + 1, body.shape.max_m[1] + 0.5, null)
+  built.equipment[0].ports.forEach((port, index) => {
+    assert.deepEqual(next.equipment[0].ports[index].position_m, [port.position_m[0] + 1, port.position_m[1] + 0.5, port.position_m[2]])
+    assert.equal(next.equipment[0].ports[index].orientation, port.orientation)
+  })
+  assert.deepEqual(next.equipment[1], built.equipment[1])
+  assert.throws(() => moveBox(built, 'obstacle', body.id, 0, body.shape.max_m[1], null), /내부/)
+  assert.equal(built.obstacles[0], body)
+  const changed = resizeBox(built, 'obstacle', body.id, 'ne', body.shape.max_m[0] + 0.25, body.shape.max_m[1], null)
+  assert.deepEqual(changed.equipment[0].ports, built.equipment[0].ports, 'resize keeps explicit connection coordinates')
+})
+
+test('port addition requires its owner and is distinct from pipe-owned waypoints', () => {
+  const built = assembly()
+  const added = createPort(built, built.equipment[1].id, [17, 8, 0], built.building.floors[0], null)
+  assert.equal(added.project.equipment[0].ports.length, 2)
+  assert.equal(added.project.equipment[1].ports.length, 3)
+  assert.equal(added.project.pipes.length, 0)
+  assert.throws(() => createPort(built, 'MISSING', [7, 6, 0], built.building.floors[0], null), /소유/)
+})
+
+test('pipe creation validates endpoints and deleting it preserves equipment and ports', () => {
+  const built = assembly()
+  const start = built.equipment[0].ports[1].id
+  const end = built.equipment[1].ports[0].id
+  const created = createPipe(built, start, end)
+  assert.equal(created.project.pipes[0].from_port_id, start)
+  assert.equal(created.project.pipes[0].to_port_id, end)
+  assert.throws(() => createPipe(built, start, start), /서로 다른/)
+  assert.throws(() => createPipe(built, start, 'MISSING'), /선택/)
+  assert.throws(() => deleteEquipment(created.project, built.equipment[0].id), /배관/)
+  const removed = deletePipe(created.project, created.pipeId)
+  assert.deepEqual(removed, built)
+  assert.deepEqual(deleteEquipment(deleteEquipment(removed, built.equipment[0].id), built.equipment[1].id), createBlankProject())
+})
+
+test('rule and geometry references block deletion instead of leaving broken JSON', () => {
+  const built = assembly()
+  const { project: connected, pipeId } = createPipe(built, built.equipment[0].ports[1].id, built.equipment[1].ports[0].id)
+  const guarded = { ...connected, constraints: [{
+    id: 'RULE-GUARD', type: 'MIN_CLEARANCE', scope: { pipe_ids: [pipeId], target_ids: [built.obstacles[0].id] },
+  }] }
+  assert.throws(() => deletePipe(guarded, pipeId), /규칙/)
+  const withoutPipe = { ...guarded, pipes: [] }
+  assert.throws(() => deleteEquipment(withoutPipe, built.equipment[0].id), /규칙/)
+  assert.throws(() => deleteObject(built, { kind: 'obstacle', id: built.obstacles[0].id }), /기기 몸체/)
+  assert.throws(() => deleteEquipment(built, 'MISSING'), /없습니다/)
+  assert.throws(() => deletePipe(built, 'MISSING'), /없습니다/)
+})
+
+test('shared equipment body is retained until its last owner is deleted', () => {
+  const built = assembly()
+  const shared = { ...built, equipment: [
+    built.equipment[0], { ...built.equipment[1], geometry_ref: built.equipment[0].geometry_ref },
+  ] }
+  const removed = deleteEquipment(shared, built.equipment[0].id)
+  assert.ok(removed.obstacles.some((item) => item.id === built.equipment[0].geometry_ref))
+})
+
+test('equipment kind edits keep geometry and histories restore a blank construction', () => {
+  const built = assembly()
+  const changed = changeEquipmentKind(built, built.equipment[0].id, 'storage_tank')
+  assert.equal(changed.equipment[0].kind, 'storage_tank')
+  assert.deepEqual(changed.obstacles, built.obstacles)
+  assert.throws(() => changeEquipmentKind(built, 'MISSING', 'pump'), /없습니다/)
+  assert.throws(() => changeEquipmentKind(built, built.equipment[0].id, 'bad'), /종류/)
+  const blank = JSON.stringify(createBlankProject())
+  const history = pushHistory(startHistory(blank), JSON.stringify(built))
+  const reverted = undoHistory(history)
+  assert.equal(reverted.present, blank)
+  assert.equal(redoHistory(reverted).present, JSON.stringify(built))
+})
 
 test('world metres and screen pixels round-trip with offset, zoom and inverted y', () => {
   const bounds = { type: 'aabb', min_m: [-4, -2, 0], max_m: [8, 10, 4] }
