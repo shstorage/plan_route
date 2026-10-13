@@ -1,0 +1,530 @@
+{
+  "scope": "Preserved batch audit; no new benchmark execution",
+  "batches": {
+    "P10B": {
+      "batch_id": "20261011T135415Z-0ee8d964e0764083be8e249dd079c18a",
+      "git_commit_at_execution": "392305b0bb751acc680e7105976a256b532a24f6",
+      "git_dirty_at_execution": true,
+      "archive_manifest_files_verified": 41,
+      "current_core_matches_archive": {
+        "src/plan_route/services/astar.py": true,
+        "src/plan_route/services/compiler.py": true,
+        "src/plan_route/services/geometry.py": true,
+        "src/plan_route/services/path_validator.py": true,
+        "src/plan_route/services/routing.py": true,
+        "uv.lock": true
+      },
+      "case_count": 100,
+      "run_count": 600,
+      "passed_runs": 600,
+      "status_counts": {
+        "SUCCESS": 468,
+        "NO_PATH": 126,
+        "SEARCH_LIMIT_REACHED": 0,
+        "INVALID_INPUT": 0,
+        "RULES_NOT_COMPILED": 0,
+        "UNAPPROVED_RULE": 0,
+        "RULE_CONFLICT": 0,
+        "INVALID_ROUTE": 6,
+        "WAYPOINT_BLOCKED": 0
+      },
+      "search_mode_counts": {
+        "EXACT_GRID": 588,
+        "EXACT_GRID_RETURNED": 6,
+        "HEURISTIC_LEGS": 6
+      },
+      "artifact_sha256": {
+        "summary.json": "b0fd1416091ae76355e0eaff5f5a00641afa81bbef44ecd579fb160a63e69a7a",
+        "environment.json": "d5c219c9be3c92880f9b164b230f0b025dd4c604c3a18aa6a37e55d1853cffe1",
+        "source.zip": "acab57efa89b3a51281e827e3b54ec83ca3f79cab3506b772331ecf4732252a6",
+        "runs.csv": "422294a4bb9fa78e032f81240692b8d720e2217fdb6ffc8bd1b237d476a332b4",
+        "comparison_statistics.json": "e2931e8ac7bc341c1cf876bee8876790db6a6b4066526c9aa6558aec9ccc26e0"
+      },
+      "statistics": {
+        "physical_scene_count": 49,
+        "diagnostic_case_count": 2,
+        "oracle_coverage": {
+          "PATH": 35,
+          "NO_PATH": 21,
+          "NOT_COMPUTED": 44
+        },
+        "validator_trials": {
+          "n": 8,
+          "false_valid": 0,
+          "false_invalid": 0,
+          "invalid_trial_count": 4,
+          "valid_trial_count": 4
+        },
+        "success_rates": [
+          {
+            "split": "development",
+            "resolution_m": 1.0,
+            "algorithm": "astar",
+            "mean": 0.8333333333333334,
+            "ci_low": 0.8333333333333334,
+            "ci_high": 0.8333333333333334,
+            "n_scenes": 30,
+            "n_seed_clusters": 5
+          },
+          {
+            "split": "development",
+            "resolution_m": 1.0,
+            "algorithm": "dijkstra",
+            "mean": 0.8333333333333334,
+            "ci_low": 0.8333333333333334,
+            "ci_high": 0.8333333333333334,
+            "n_scenes": 30,
+            "n_seed_clusters": 5
+          },
+          {
+            "split": "development",
+            "resolution_m": 0.5,
+            "algorithm": "astar",
+            "mean": 1,
+            "ci_low": 1.0,
+            "ci_high": 1.0,
+            "n_scenes": 30,
+            "n_seed_clusters": 5
+          },
+          {
+            "split": "development",
+            "resolution_m": 0.5,
+            "algorithm": "dijkstra",
+            "mean": 1,
+            "ci_low": 1.0,
+            "ci_high": 1.0,
+            "n_scenes": 30,
+            "n_seed_clusters": 5
+          },
+          {
+            "split": "evaluation",
+            "resolution_m": 1.0,
+            "algorithm": "astar",
+            "mean": 0.8333333333333334,
+            "ci_low": 0.8333333333333334,
+            "ci_high": 0.8333333333333334,
+            "n_scenes": 12,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "resolution_m": 1.0,
+            "algorithm": "dijkstra",
+            "mean": 0.8333333333333334,
+            "ci_low": 0.8333333333333334,
+            "ci_high": 0.8333333333333334,
+            "n_scenes": 12,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "resolution_m": 0.5,
+            "algorithm": "astar",
+            "mean": 1,
+            "ci_low": 1.0,
+            "ci_high": 1.0,
+            "n_scenes": 12,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "resolution_m": 0.5,
+            "algorithm": "dijkstra",
+            "mean": 1,
+            "ci_low": 1.0,
+            "ci_high": 1.0,
+            "n_scenes": 12,
+            "n_seed_clusters": 2
+          }
+        ],
+        "paired_exact_comparisons": [
+          {
+            "split": "development",
+            "resolution_m": 1.0,
+            "metric": "median_total_ms_dijkstra_minus_astar",
+            "mean": 2.8469199992832728,
+            "ci_low": 2.4726159998681396,
+            "ci_high": 3.376383998838719,
+            "n_scenes": 25,
+            "n_seed_clusters": 5,
+            "max_absolute_objective_gap": 0.0,
+            "astar_ms": {
+              "mean": 5.174476001120638,
+              "ci_low": 4.785724001121707,
+              "ci_high": 5.5387880018679425,
+              "n_scenes": 25,
+              "n_seed_clusters": 5
+            },
+            "dijkstra_ms": {
+              "mean": 8.02139600040391,
+              "ci_low": 7.717680000059772,
+              "ci_high": 8.291484000801574,
+              "n_scenes": 25,
+              "n_seed_clusters": 5
+            }
+          },
+          {
+            "split": "development",
+            "resolution_m": 0.5,
+            "metric": "median_total_ms_dijkstra_minus_astar",
+            "mean": 95.56192333329818,
+            "ci_low": 90.7689500003471,
+            "ci_high": 100.35489666624926,
+            "n_scenes": 30,
+            "n_seed_clusters": 5,
+            "max_absolute_objective_gap": 0.0,
+            "astar_ms": {
+              "mean": 53.465280000576364,
+              "ci_low": 52.747913334557474,
+              "ci_high": 54.18264666659525,
+              "n_scenes": 30,
+              "n_seed_clusters": 5
+            },
+            "dijkstra_ms": {
+              "mean": 149.02720333387455,
+              "ci_low": 144.58731666721482,
+              "ci_high": 153.9235000006253,
+              "n_scenes": 30,
+              "n_seed_clusters": 5
+            }
+          },
+          {
+            "split": "evaluation",
+            "resolution_m": 1.0,
+            "metric": "median_total_ms_dijkstra_minus_astar",
+            "mean": 3.173159999278141,
+            "ci_low": 3.1440399994608015,
+            "ci_high": 3.202279999095481,
+            "n_scenes": 10,
+            "n_seed_clusters": 2,
+            "max_absolute_objective_gap": 0.0,
+            "astar_ms": {
+              "mean": 5.274980001559015,
+              "ci_low": 5.2616200016927905,
+              "ci_high": 5.28834000142524,
+              "n_scenes": 10,
+              "n_seed_clusters": 2
+            },
+            "dijkstra_ms": {
+              "mean": 8.448140000837157,
+              "ci_low": 8.432380000886042,
+              "ci_high": 8.463900000788271,
+              "n_scenes": 10,
+              "n_seed_clusters": 2
+            }
+          },
+          {
+            "split": "evaluation",
+            "resolution_m": 0.5,
+            "metric": "median_total_ms_dijkstra_minus_astar",
+            "mean": 93.30055833258182,
+            "ci_low": 93.09021666679958,
+            "ci_high": 93.51089999836404,
+            "n_scenes": 12,
+            "n_seed_clusters": 2,
+            "max_absolute_objective_gap": 0.0,
+            "astar_ms": {
+              "mean": 58.58409166770192,
+              "ci_low": 58.16981666794163,
+              "ci_high": 58.9983666674622,
+              "n_scenes": 12,
+              "n_seed_clusters": 2
+            },
+            "dijkstra_ms": {
+              "mean": 151.88465000028373,
+              "ci_low": 151.68071666630567,
+              "ci_high": 152.08858333426178,
+              "n_scenes": 12,
+              "n_seed_clusters": 2
+            }
+          }
+        ]
+      }
+    },
+    "P10C": {
+      "batch_id": "20261012T080959Z-d110cef3f05242e7b9a7acc6fdcda1bf",
+      "git_commit_at_execution": "00b610733ab0a2a68ec645fc1d6651bfd39ae653",
+      "git_dirty_at_execution": true,
+      "archive_manifest_files_verified": 44,
+      "current_core_matches_archive": {
+        "src/plan_route/services/astar.py": true,
+        "src/plan_route/services/compiler.py": true,
+        "src/plan_route/services/geometry.py": true,
+        "src/plan_route/services/path_validator.py": true,
+        "src/plan_route/services/routing.py": true,
+        "uv.lock": true
+      },
+      "case_count": 168,
+      "run_count": 1008,
+      "passed_runs": 1008,
+      "status_counts": {
+        "SUCCESS": 756,
+        "NO_PATH": 84,
+        "SEARCH_LIMIT_REACHED": 0,
+        "INVALID_INPUT": 0,
+        "RULES_NOT_COMPILED": 0,
+        "UNAPPROVED_RULE": 168,
+        "RULE_CONFLICT": 0,
+        "INVALID_ROUTE": 0,
+        "WAYPOINT_BLOCKED": 0
+      },
+      "search_mode_counts": {
+        "EXACT_GRID": 840,
+        "NOT_RUN": 168
+      },
+      "artifact_sha256": {
+        "summary.json": "d558d1a8641bd7d017082372f7fa4a62ff3d27291491c51932b07e3e62527137",
+        "environment.json": "2e8442cfc4204925b479dd28fdc42673c9472b6c930f8fb6c8fe18501694ff64",
+        "source.zip": "c24c8188c4940cce2eab19dc4f968fe2c4d623f0c804479b7fcb25bbd8e87a46",
+        "runs.csv": "e8d8eb5510d41c1169d41753e25fd765daec628e04a38bb14265f18ff2e52aaf",
+        "change_statistics.json": "261a1cbe1b4d9f04fe1b8e0264a4d3fb81be96ea67210e098c75c9945da42a0b"
+      },
+      "statistics": {
+        "physical_scene_count": 7,
+        "comparison_count": 308,
+        "exact_success_pairs": 224,
+        "status_transitions": [
+          "SUCCESS->NO_PATH",
+          "SUCCESS->SUCCESS",
+          "SUCCESS->UNAPPROVED_RULE"
+        ],
+        "applied_trace": {
+          "expected_links": 1428,
+          "complete_links": 1428,
+          "coverage": 1.0
+        },
+        "counterfactual_trace": {
+          "expected_links": 708,
+          "complete_links": 708,
+          "checks_without_rule_violations": 420
+        },
+        "evaluation_astar_objective_deltas": [
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 0.5,
+            "algorithm": "astar",
+            "intervention": "ADD_RULE",
+            "changed_rule_ids": [
+              "RULE-CLEAR"
+            ],
+            "mean": 0.4999999999999982,
+            "ci_low": 0.0,
+            "ci_high": 0.9999999999999964,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 0.5,
+            "algorithm": "astar",
+            "intervention": "ADD_RULE",
+            "changed_rule_ids": [
+              "RULE-DUPLICATE"
+            ],
+            "mean": 0.0,
+            "ci_low": 0.0,
+            "ci_high": 0.0,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 0.5,
+            "algorithm": "astar",
+            "intervention": "ADD_RULE",
+            "changed_rule_ids": [
+              "RULE-KEEP"
+            ],
+            "mean": 14.000000000000002,
+            "ci_low": 14.000000000000002,
+            "ci_high": 14.000000000000002,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 0.5,
+            "algorithm": "astar",
+            "intervention": "DISTANCE_EDIT",
+            "changed_rule_ids": [
+              "RULE-CLEAR"
+            ],
+            "mean": 1.9999999999999982,
+            "ci_low": 1.9999999999999964,
+            "ci_high": 2.0,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 0.5,
+            "algorithm": "astar",
+            "intervention": "REMOVE_RULE",
+            "changed_rule_ids": [
+              "RULE-CLEAR"
+            ],
+            "mean": -2.4999999999999964,
+            "ci_low": -2.9999999999999964,
+            "ci_high": -1.9999999999999964,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 0.5,
+            "algorithm": "astar",
+            "intervention": "REMOVE_RULE",
+            "changed_rule_ids": [
+              "RULE-DUPLICATE"
+            ],
+            "mean": 0.0,
+            "ci_low": 0.0,
+            "ci_high": 0.0,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 0.5,
+            "algorithm": "astar",
+            "intervention": "REMOVE_RULE",
+            "changed_rule_ids": [
+              "RULE-KEEP"
+            ],
+            "mean": 0.0,
+            "ci_low": 0.0,
+            "ci_high": 0.0,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 0.5,
+            "algorithm": "astar",
+            "intervention": "SOURCE_EDIT",
+            "changed_rule_ids": [
+              "RULE-CLEAR"
+            ],
+            "mean": 0.0,
+            "ci_low": 0.0,
+            "ci_high": 0.0,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 1.0,
+            "algorithm": "astar",
+            "intervention": "ADD_RULE",
+            "changed_rule_ids": [
+              "RULE-CLEAR"
+            ],
+            "mean": 0.0,
+            "ci_low": 0.0,
+            "ci_high": 0.0,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 1.0,
+            "algorithm": "astar",
+            "intervention": "ADD_RULE",
+            "changed_rule_ids": [
+              "RULE-DUPLICATE"
+            ],
+            "mean": 0.0,
+            "ci_low": 0.0,
+            "ci_high": 0.0,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 1.0,
+            "algorithm": "astar",
+            "intervention": "ADD_RULE",
+            "changed_rule_ids": [
+              "RULE-KEEP"
+            ],
+            "mean": 16.0,
+            "ci_low": 16.0,
+            "ci_high": 16.0,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 1.0,
+            "algorithm": "astar",
+            "intervention": "DISTANCE_EDIT",
+            "changed_rule_ids": [
+              "RULE-CLEAR"
+            ],
+            "mean": 2.0,
+            "ci_low": 2.0,
+            "ci_high": 2.0,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 1.0,
+            "algorithm": "astar",
+            "intervention": "REMOVE_RULE",
+            "changed_rule_ids": [
+              "RULE-CLEAR"
+            ],
+            "mean": -2.0,
+            "ci_low": -2.0,
+            "ci_high": -2.0,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 1.0,
+            "algorithm": "astar",
+            "intervention": "REMOVE_RULE",
+            "changed_rule_ids": [
+              "RULE-DUPLICATE"
+            ],
+            "mean": 0.0,
+            "ci_low": 0.0,
+            "ci_high": 0.0,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 1.0,
+            "algorithm": "astar",
+            "intervention": "REMOVE_RULE",
+            "changed_rule_ids": [
+              "RULE-KEEP"
+            ],
+            "mean": 0.0,
+            "ci_low": 0.0,
+            "ci_high": 0.0,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          },
+          {
+            "split": "evaluation",
+            "grid_resolution_m": 1.0,
+            "algorithm": "astar",
+            "intervention": "SOURCE_EDIT",
+            "changed_rule_ids": [
+              "RULE-CLEAR"
+            ],
+            "mean": 0.0,
+            "ci_low": 0.0,
+            "ci_high": 0.0,
+            "n_scenes": 2,
+            "n_seed_clusters": 2
+          }
+        ]
+      }
+    }
+  }
+}

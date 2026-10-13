@@ -33,6 +33,10 @@ class ProjectNotFoundError(FileNotFoundError):
     pass
 
 
+class ProjectRevisionConflictError(ValueError):
+    pass
+
+
 class ProjectSummary(ContractModel):
     project_id: str
     project_name: str | None
@@ -167,3 +171,15 @@ def save_project(project: EngineeringProject) -> StoredProject:
             if temporary is not None and os.path.exists(temporary):
                 os.unlink(temporary)
         return saved
+
+
+def delete_project(project_id: str, expected_revision: int) -> None:
+    """Remove the verified saved document the user reviewed, under the store lock."""
+    path = _project_path(project_id)
+    with _STORE_LOCK:
+        saved = load_project(project_id)
+        if saved.revision != expected_revision:
+            raise ProjectRevisionConflictError(
+                "저장 개정이 변경됐습니다. 목록을 새로고침한 뒤 다시 확인해 주세요."
+            )
+        path.unlink()

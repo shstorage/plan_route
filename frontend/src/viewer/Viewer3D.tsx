@@ -10,6 +10,7 @@ import { worldToScene, type ScenePoint } from './axes.ts'
 import { buildSceneModel, cameraFor, ruleTargetIds, type BoxStyle, type CameraPreset, type SceneBox, type SceneSegment } from './scene.ts'
 import './Viewer3D.css'
 import { RouteStatusNotice } from '../editor/RouteStatusNotice'
+import { useHostWindow } from '../ui/HostWindow'
 
 type Props = {
   project: EngineeringProject
@@ -46,6 +47,11 @@ const boxLook: Record<BoxStyle, { color: string; opacity: number; edge: string }
 const SELECTED = '#0a8fb2'
 const RULE_TARGET = '#c2337a'
 
+function setPointerCursor(event: ThreeEvent<PointerEvent>, cursor: string) {
+  const target = event.nativeEvent.target as HTMLElement | null
+  if (target?.ownerDocument) target.ownerDocument.body.style.cursor = cursor
+}
+
 function selectionKey(selection: Selection | null): string {
   return selection ? `${selection.kind}:${selection.id}` : ''
 }
@@ -68,8 +74,8 @@ const BoxMesh = memo(function BoxMesh({ box, selected, ruleTarget, onSelect }: {
       // Slabs span a whole storey; letting them catch clicks would hide everything beneath.
       raycast={slab ? noRaycast : undefined}
       onClick={(event: ThreeEvent<MouseEvent>) => { event.stopPropagation(); onSelect(box.selection) }}
-      onPointerOver={(event: ThreeEvent<PointerEvent>) => { event.stopPropagation(); document.body.style.cursor = 'pointer' }}
-      onPointerOut={() => { document.body.style.cursor = '' }}
+      onPointerOver={(event: ThreeEvent<PointerEvent>) => { event.stopPropagation(); setPointerCursor(event, 'pointer') }}
+      onPointerOut={(event) => setPointerCursor(event, '')}
     >
       <meshStandardMaterial
         color={selected ? '#7cc8dc' : look.color}
@@ -131,11 +137,12 @@ function CameraRig({ boundsKey, request }: { boundsKey: string; request: CameraR
   // Read camera/controls through get() inside the effect: they are mutable three.js objects, not React state.
   const get = useThree((state) => state.get)
   const controlsReady = useThree((state) => state.controls !== null)
+  const aspect = useThree((state) => state.size.width / Math.max(1, state.size.height))
   useEffect(() => {
     const { camera, invalidate } = get()
     const controls = get().controls as unknown as { target: THREE.Vector3; update: () => void } | null
     const bounds = JSON.parse(boundsKey) as Aabb
-    const { position, target } = cameraFor(bounds, request.preset)
+    const { position, target } = cameraFor(bounds, request.preset, aspect)
     const span = Math.max(...bounds.max_m.map((value, axis) => value - bounds.min_m[axis]))
     camera.position.set(...position)
     camera.near = Math.max(0.01, span / 2000)
@@ -148,11 +155,29 @@ function CameraRig({ boundsKey, request }: { boundsKey: string; request: CameraR
       camera.lookAt(...target)
     }
     invalidate()
-  }, [boundsKey, request, get, controlsReady])
+  }, [boundsKey, request, get, controlsReady, aspect])
+  return null
+}
+
+/** A portal's canvas must redraw even when the main window's RAF is suspended. */
+function HostFrames({ host }: { host: Window }) {
+  const get = useThree((state) => state.get)
+  useEffect(() => {
+    if (host === window) return
+    let frame = 0
+    const draw = (time: number) => {
+      const state = get()
+      if (state.internal.active && state.internal.frames > 0) state.advance(time)
+      frame = host.requestAnimationFrame(draw)
+    }
+    frame = host.requestAnimationFrame(draw)
+    return () => host.cancelAnimationFrame(frame)
+  }, [host, get])
   return null
 }
 
 export function Viewer3D({ project, route, selectedPipeId, selection, onSelect, focusRuleId: ruleId, onFocusRule: setRuleId, busy, solving, onSelectPipe, onSolve }: Props) {
+  const host = useHostWindow()
   const [camera, setCamera] = useState<CameraRequest>({ preset: 'aerial', nonce: 0 })
   const [showTube, setShowTube] = useState(true)
   const [showSlabs, setShowSlabs] = useState(true)
@@ -206,6 +231,7 @@ export function Viewer3D({ project, route, selectedPipeId, selection, onSelect, 
       <div className="viewer-canvas">
         <Canvas
           frameloop="demand"
+          resize={{ polyfill: (host as Window & typeof globalThis).ResizeObserver, debounce: 0 }}
           camera={{ fov: 45, position: [0, 10, 10] }}
           fallback={<div className="viewer-fallback">이 브라우저에서는 WebGL을 사용할 수 없어 3D 보기를 표시할 수 없습니다.</div>}
         >
@@ -213,6 +239,7 @@ export function Viewer3D({ project, route, selectedPipeId, selection, onSelect, 
           <ambientLight intensity={0.75} />
           <directionalLight position={[gridSize, gridSize * 1.5, gridSize * 0.6]} intensity={1.1} />
           <OrbitControls makeDefault enableDamping={false} />
+          <HostFrames host={host} />
           <CameraRig boundsKey={boundsKey} request={camera} />
           <FloorGrid bounds={project.building.bounds_m} step={gridStep} />
           <mesh geometry={unitBox} position={model.bounds.center} scale={model.bounds.size} raycast={noRaycast}>
@@ -239,8 +266,8 @@ export function Viewer3D({ project, route, selectedPipeId, selection, onSelect, 
                 position={port.center}
                 scale={(isSelected ? 1.4 : 1) * (roleColor ? 1.5 : 1) * portRadius}
                 onClick={(event: ThreeEvent<MouseEvent>) => { event.stopPropagation(); onSelect({ kind: 'port', id: port.id }) }}
-                onPointerOver={(event: ThreeEvent<PointerEvent>) => { event.stopPropagation(); document.body.style.cursor = 'pointer' }}
-                onPointerOut={() => { document.body.style.cursor = '' }}
+                onPointerOver={(event: ThreeEvent<PointerEvent>) => { event.stopPropagation(); setPointerCursor(event, 'pointer') }}
+                onPointerOut={(event) => setPointerCursor(event, '')}
               >
                 <meshStandardMaterial color={roleColor ?? (isSelected ? SELECTED : isTarget ? RULE_TARGET : '#ffffff')} emissive={isSelected ? SELECTED : '#000000'} emissiveIntensity={0.3} />
               </mesh>
@@ -256,8 +283,8 @@ export function Viewer3D({ project, route, selectedPipeId, selection, onSelect, 
                 position={waypoint.center}
                 scale={(isSelected ? 2.2 : 1.8) * portRadius}
                 onClick={(event: ThreeEvent<MouseEvent>) => { event.stopPropagation(); onSelect({ kind: 'waypoint', id: waypoint.id }) }}
-                onPointerOver={(event: ThreeEvent<PointerEvent>) => { event.stopPropagation(); document.body.style.cursor = 'pointer' }}
-                onPointerOut={() => { document.body.style.cursor = '' }}
+                onPointerOver={(event: ThreeEvent<PointerEvent>) => { event.stopPropagation(); setPointerCursor(event, 'pointer') }}
+                onPointerOut={(event) => setPointerCursor(event, '')}
               >
                 <meshStandardMaterial color={ROLE_COLORS.waypoint} emissive={isSelected ? SELECTED : '#000000'} emissiveIntensity={0.4} />
               </mesh>

@@ -1,0 +1,119 @@
+{
+  "batch_id": "P10D-20261013T073806Z-3b3281e648244d51a898da40efb729d4",
+  "summary": {
+    "contract": "public_reference_examples_v1",
+    "authored_scenes": 4,
+    "runs": 144,
+    "statuses": {
+      "SUCCESS": 108,
+      "INVALID_ROUTE": 36
+    },
+    "valid_runs": 108,
+    "route_rejections": 36,
+    "valid_authored_witnesses": 4,
+    "finite_valid_cost_pairs": 10,
+    "gold_probes": 24,
+    "contract_probe_matches": 24,
+    "normalized_valid_probes": 14,
+    "normalized_invalid_probes": 10,
+    "normalized_false_valid": 0,
+    "normalized_false_invalid": 2,
+    "link_true_positives": 18,
+    "link_false_positives": 0,
+    "link_false_negatives": 0,
+    "approval_controls": 8,
+    "failures": [],
+    "limitations": [
+      "not legal/compliance ground truth",
+      "three source types, four hand-built scenes",
+      "boundary and split probes are correlated",
+      "A*/Dijkstra share production code",
+      "no independent optimal-cost oracle",
+      "fine-grid connector self-clearance can reject a route in a feasible scene",
+      "no statistical generalization or human-time study"
+    ]
+  },
+  "astar_pairs": [
+    {
+      "case_id": "P10D-WALL-SMALL",
+      "resolution_m": 0.5,
+      "after_status": "SUCCESS",
+      "old_path_under_new_rules": "VALID",
+      "delta_length_m": 1.0,
+      "delta_bends": 4,
+      "delta_objective": 9.0
+    },
+    {
+      "case_id": "P10D-WALL-SMALL",
+      "resolution_m": 0.25,
+      "after_status": "INVALID_ROUTE",
+      "old_path_under_new_rules": "VALID",
+      "delta_length_m": null,
+      "delta_bends": null,
+      "delta_objective": null
+    },
+    {
+      "case_id": "P10D-WALL-LARGE",
+      "resolution_m": 0.5,
+      "after_status": "SUCCESS",
+      "old_path_under_new_rules": "VALID",
+      "delta_length_m": 1.0,
+      "delta_bends": 4,
+      "delta_objective": 9.0
+    },
+    {
+      "case_id": "P10D-WALL-LARGE",
+      "resolution_m": 0.25,
+      "after_status": "INVALID_ROUTE",
+      "old_path_under_new_rules": "INVALID_ROUTE",
+      "delta_length_m": null,
+      "delta_bends": null,
+      "delta_objective": null
+    },
+    {
+      "case_id": "P10D-ELECTRICAL",
+      "resolution_m": 0.5,
+      "after_status": "SUCCESS",
+      "old_path_under_new_rules": "INVALID_ROUTE",
+      "delta_length_m": 3.0,
+      "delta_bends": 4,
+      "delta_objective": 11.0
+    },
+    {
+      "case_id": "P10D-ELECTRICAL",
+      "resolution_m": 0.25,
+      "after_status": "INVALID_ROUTE",
+      "old_path_under_new_rules": "INVALID_ROUTE",
+      "delta_length_m": null,
+      "delta_bends": null,
+      "delta_objective": null
+    },
+    {
+      "case_id": "P10D-THERMAL-WALKWAY",
+      "resolution_m": 0.5,
+      "after_status": "SUCCESS",
+      "old_path_under_new_rules": "INVALID_ROUTE",
+      "delta_length_m": 3.0,
+      "delta_bends": 4,
+      "delta_objective": 11.0
+    },
+    {
+      "case_id": "P10D-THERMAL-WALKWAY",
+      "resolution_m": 0.25,
+      "after_status": "SUCCESS",
+      "old_path_under_new_rules": "INVALID_ROUTE",
+      "delta_length_m": 2.0,
+      "delta_bends": 4,
+      "delta_objective": 10.0
+    }
+  ],
+  "increased_cost_with_valid_old_path_pairs": 4,
+  "input_file_sha256": {
+    "runs.csv": "e9aec39e50d62f6ca16ac493b86d67fba01c5bfb48b0758a48a925954bc2e330",
+    "summary.json": "6a5f08f26336981248d3b91e0d0bd5b7be5b926bc759da7114619b20ab5e3920",
+    "comparisons.json": "9abd0e484c3340573d03ae96e48bb4b3b3e0f0879c7d7a83e1d4465940197af4",
+    "gold_probes.json": "7ae99fa7cf40bff5517fdfd5554e9486d7f50fe49d599977e7397272a7be7d33",
+    "sources.json": "8304b32730431583fa31b4c5c8a6ed87321fba55eeb551d8b0de78f022dce994",
+    "source.zip": "d5d639028e0a6f32f3530330f4fb9341f25953d05b3a27730065a2c861a52f26"
+  }
+}

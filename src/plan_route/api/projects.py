@@ -1,11 +1,11 @@
-"""Read-only demo project and project contract validation endpoints."""
+"""Synthetic fixtures and validated project persistence endpoints."""
 
 import json
 from datetime import datetime
 from importlib.resources import files
 from typing import Literal
 
-from fastapi import APIRouter, Body, Response
+from fastapi import APIRouter, Body, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,8 @@ from plan_route.models.geometry import Identifier
 from plan_route.services.project_store import (
     ProjectList,
     ProjectNotFoundError,
+    ProjectRevisionConflictError,
+    delete_project,
     list_projects,
     load_project,
     save_project,
@@ -55,6 +57,17 @@ class ProjectSaveResponse(BaseModel):
 
 class ProjectNotFoundResponse(BaseModel):
     error_code: Literal["NOT_FOUND"] = "NOT_FOUND"
+    message: str
+    details: list[ValidationIssue] = Field(default_factory=list)
+
+
+class ProjectDeleteResponse(BaseModel):
+    project_id: str
+    deleted: Literal[True] = True
+
+
+class ProjectDeleteErrorResponse(BaseModel):
+    error_code: Literal["REVISION_CONFLICT", "PROTECTED_PROJECT", "STORAGE_ERROR"]
     message: str
     details: list[ValidationIssue] = Field(default_factory=list)
 
@@ -156,3 +169,50 @@ def get_project_document(
     response.headers["X-Project-Updated-At"] = saved.updated_at.isoformat()
     response.headers["ETag"] = f'"{saved.document_hash}"'
     return saved.project
+
+
+@router.delete(
+    "/{project_id}",
+    response_model=ProjectDeleteResponse,
+    responses={
+        404: {"model": ProjectNotFoundResponse},
+        409: {"model": ProjectDeleteErrorResponse},
+        422: {"model": InvalidInputResponse},
+        503: {"model": ProjectDeleteErrorResponse},
+    },
+)
+def delete_project_document(
+    project_id: Identifier, expected_revision: int = Query(gt=0)
+) -> ProjectDeleteResponse | JSONResponse:
+    if project_id in {"demo", "starter"}:
+        body = ProjectDeleteErrorResponse(
+            error_code="PROTECTED_PROJECT",
+            message="합성 예제 원본은 삭제할 수 없습니다.",
+        )
+        return JSONResponse(status_code=409, content=body.model_dump())
+    try:
+        delete_project(project_id, expected_revision)
+    except ProjectNotFoundError as error:
+        return JSONResponse(
+            status_code=404,
+            content=ProjectNotFoundResponse(message=str(error)).model_dump(),
+        )
+    except ProjectRevisionConflictError as error:
+        body = ProjectDeleteErrorResponse(
+            error_code="REVISION_CONFLICT", message=str(error)
+        )
+        return JSONResponse(status_code=409, content=body.model_dump())
+    except ValueError:
+        return JSONResponse(
+            status_code=422,
+            content=InvalidInputResponse(
+                message="저장 파일을 검증하지 못해 삭제하지 않았습니다.", details=[]
+            ).model_dump(),
+        )
+    except OSError:
+        body = ProjectDeleteErrorResponse(
+            error_code="STORAGE_ERROR",
+            message="저장 파일을 삭제하지 못했습니다. 다시 시도해 주세요.",
+        )
+        return JSONResponse(status_code=503, content=body.model_dump())
+    return ProjectDeleteResponse(project_id=project_id)

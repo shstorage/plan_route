@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { PerspectiveCamera, Vector3 } from 'three'
 import { sceneToWorld, worldBoxToScene, worldToScene } from './axes.ts'
 import { buildSceneModel, cameraFor, ruleTargetIds } from './scene.ts'
 import { createBlankProject, createEquipment, deleteEquipment, floorsShowing, moveBox, updatePort } from '../editor/model.ts'
@@ -9,6 +10,25 @@ import { createBlankProject, createEquipment, deleteEquipment, floorsShowing, mo
 const fixture = (name) => new URL(`../../../src/plan_route/fixtures/${name}`, import.meta.url)
 const load = (name) => JSON.parse(readFileSync(fileURLToPath(fixture(name)), 'utf8'))
 const demo = () => load('demo_project.json')
+
+test('camera fits building corners and centres its target for portrait and wide canvases', () => {
+  for (const bounds of [load('plant_starter_project.json').building.bounds_m, { type: 'aabb', min_m: [-120, 40, -5], max_m: [-100, 52, 1] }]) {
+    for (const aspect of [0.5, 1, 1.5, 3]) for (const preset of ['aerial', 'plan']) {
+      const { position, target } = cameraFor(bounds, preset, aspect)
+      const camera = new PerspectiveCamera(45, aspect, 0.001, 100000)
+      camera.position.set(...position)
+      camera.lookAt(new Vector3(...target))
+      camera.updateMatrixWorld()
+      const projectedTarget = new Vector3(...target).project(camera)
+      assert.ok(Math.abs(projectedTarget.x)<1e-9 && Math.abs(projectedTarget.y)<1e-9, 'building centre is canvas centre')
+      for (const x of [bounds.min_m[0], bounds.max_m[0]]) for (const y of [bounds.min_m[1], bounds.max_m[1]]) for (const z of [bounds.min_m[2], bounds.max_m[2]]) {
+        const projected = new Vector3(...worldToScene([x,y,z])).project(camera)
+        assert.ok(Math.abs(projected.x)<=1/1.15+1e-9 && Math.abs(projected.y)<=1/1.15+1e-9, `${preset} ${aspect}: all corners fit`)
+        assert.ok(projected.z>0 && projected.z<1)
+      }
+    }
+  }
+})
 
 test('blank equipment construction and translation use the same bodies and ports in 3D', () => {
   const blank = createBlankProject()

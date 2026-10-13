@@ -1,0 +1,147 @@
+{
+  "schema_version": "1.0.0",
+  "project_id": "P10D-WALL-SMALL",
+  "study_type": "synthetic_benchmark",
+  "unit_system": "SI",
+  "coordinate_frame": {
+    "name": "SYNTHETIC",
+    "unit": "m",
+    "up_axis": "z",
+    "origin_m": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "building": {
+    "bounds_m": {
+      "type": "aabb",
+      "min_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_m": [
+        6.0,
+        4.0,
+        3.0
+      ]
+    },
+    "floors": [
+      {
+        "id": "L1",
+        "z_min_m": 0.0,
+        "z_max_m": 3.0
+      }
+    ]
+  },
+  "obstacles": [
+    {
+      "id": "WORK-WALL",
+      "kind": "wall",
+      "shape": {
+        "type": "aabb",
+        "min_m": [
+          2.5,
+          1.7,
+          0.0
+        ],
+        "max_m": [
+          3.5,
+          3.9,
+          3.0
+        ]
+      }
+    }
+  ],
+  "zones": [],
+  "equipment": [
+    {
+      "id": "EQ-A",
+      "kind": "synthetic_terminal",
+      "geometry_ref": null,
+      "ports": [
+        {
+          "id": "PORT-A",
+          "position_m": [
+            0.75,
+            1.25,
+            1.25
+          ],
+          "orientation": "+x"
+        }
+      ]
+    },
+    {
+      "id": "EQ-B",
+      "kind": "synthetic_terminal",
+      "geometry_ref": null,
+      "ports": [
+        {
+          "id": "PORT-B",
+          "position_m": [
+            4.75,
+            1.25,
+            1.25
+          ],
+          "orientation": "-x"
+        }
+      ]
+    }
+  ],
+  "pipes": [
+    {
+      "id": "PIPE-101",
+      "from_port_id": "PORT-A",
+      "to_port_id": "PORT-B",
+      "outer_diameter_m": 0.1143,
+      "insulation_thickness_m": 0.04,
+      "clearance_margin_m": 0.0,
+      "train_id": null,
+      "waypoints": []
+    }
+  ],
+  "constraints": [
+    {
+      "id": "RULE-PUBLIC",
+      "type": "MIN_CLEARANCE",
+      "severity": "hard",
+      "scope": {
+        "pipe_ids": [
+          "PIPE-101"
+        ],
+        "target_ids": [
+          "WORK-WALL"
+        ]
+      },
+      "parameters": {
+        "distance_m": 0.15,
+        "distance_basis": "insulated_pipe_surface_to_target_surface"
+      },
+      "source": {
+        "source_type": "public_reference",
+        "document_id": "UFGS-23-22-26-00-20",
+        "document_revision": "02-2010-CHG1-05-2015",
+        "clause_id": "SEC-3-1-1",
+        "evidence_text": "Welding access clearance by nominal size. Synthetic normalization measures outside insulation; not plant-code compliance."
+      },
+      "status": "draft",
+      "approved_by": null,
+      "approved_at": null,
+      "definition_revision": 1,
+      "approved_content_sha256": null,
+      "approval_history": []
+    }
+  ],
+  "routing_config": {
+    "grid_resolution_m": 0.5,
+    "cost_weights": {
+      "length_per_m": 1.0,
+      "bend_per_event": 2.0,
+      "preferred_zone_factor": 1.0
+    },
+    "search_limits": {
+      "max_expansions": 400000
+    }
+  }
+}

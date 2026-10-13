@@ -186,3 +186,77 @@ def test_list_verifies_hash_and_sorts_latest_saved_first(monkeypatch):
     listing = project_store.list_projects()
     assert [item.project_id for item in listing.projects] == [project.project_id]
     assert listing.issues[0].filename == "SECOND.json"
+
+
+def test_delete_only_selected_document_and_reject_stale_revision():
+    project = load_demo_project()
+    project_store.save_project(project)
+    other = project.model_copy(update={"project_id": "KEEP"})
+    kept = project_store.save_project(other)
+    project_store.save_project(project)
+    with pytest.raises(project_store.ProjectRevisionConflictError):
+        project_store.delete_project(project.project_id, 1)
+    assert project_store.load_project(project.project_id).revision == 2
+    project_store.delete_project(project.project_id, 2)
+    with pytest.raises(project_store.ProjectNotFoundError):
+        project_store.load_project(project.project_id)
+    assert project_store.load_project("KEEP") == kept
+
+
+@pytest.mark.parametrize("malicious", ["../outside", "..\\outside", "A/B", "A.B"])
+def test_delete_rejects_unsafe_paths_without_removing_files(tmp_path, malicious):
+    outside = tmp_path / "outside.json"
+    outside.write_text("preserve", encoding="utf-8")
+    with pytest.raises(ValueError, match="project_id"):
+        project_store.delete_project(malicious, 1)
+    assert outside.read_text(encoding="utf-8") == "preserve"
+
+
+def test_delete_api_errors_and_cors_preserve_documents(monkeypatch):
+    project = load_demo_project()
+    saved = project_store.save_project(project)
+    url = f"/api/projects/{project.project_id}?expected_revision=1"
+    with TestClient(app) as client:
+        preflight = client.options(url, headers={
+            "Origin": "http://127.0.0.1:5173",
+            "Access-Control-Request-Method": "DELETE",
+        })
+        assert preflight.status_code == 200
+        missing = client.delete("/api/projects/MISSING?expected_revision=1")
+        assert missing.status_code == 404
+        for reserved in ("demo", "starter"):
+            response = client.delete(f"/api/projects/{reserved}?expected_revision=1")
+            assert response.status_code == 409
+            assert response.json()["error_code"] == "PROTECTED_PROJECT"
+            assert client.get(f"/api/projects/{reserved}").status_code == 200
+        assert client.delete(f"/api/projects/{project.project_id}").status_code == 422
+        assert client.delete(url.replace("revision=1", "revision=0")).status_code == 422
+        assert client.delete(url.replace("revision=1", "revision=2")).status_code == 409
+        assert project_store.load_project(project.project_id) == saved
+
+        def fail_unlink(_path, **_kwargs):
+            raise PermissionError("simulated access failure")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(type(project_store.PROJECTS_DIR), "unlink", fail_unlink)
+            response = client.delete(url)
+            assert response.status_code == 503
+            assert response.json()["error_code"] == "STORAGE_ERROR"
+        assert project_store.load_project(project.project_id) == saved
+        response = client.delete(url)
+        assert response.status_code == 200
+        assert response.json() == {"deleted": True, "project_id": project.project_id}
+        assert client.get("/api/projects").json()["projects"] == []
+        assert client.delete(url).status_code == 404
+
+
+def test_delete_does_not_remove_corrupt_document():
+    project = load_demo_project()
+    project_store.save_project(project)
+    path = project_store.PROJECTS_DIR / f"{project.project_id}.json"
+    path.write_text("broken", encoding="utf-8")
+    response = TestClient(app).delete(
+        f"/api/projects/{project.project_id}?expected_revision=1"
+    )
+    assert response.status_code == 422
+    assert path.read_text(encoding="utf-8") == "broken"

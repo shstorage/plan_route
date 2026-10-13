@@ -152,13 +152,25 @@ export type CameraPreset = 'aerial' | 'plan'
  * The plan view looks straight down with world +Y pointing up on screen (as in the 2D editor);
  * a tiny -Y offset keeps OrbitControls' azimuth defined.
  */
-export function cameraFor(bounds: Aabb, preset: CameraPreset): { position: ScenePoint; target: ScenePoint } {
+export function cameraFor(bounds: Aabb, preset: CameraPreset, aspect = 1.5): { position: ScenePoint; target: ScenePoint } {
   const min = bounds.min_m
   const max = bounds.max_m
   const center: [number, number, number] = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2]
-  const span = Math.max(max[0] - min[0], max[1] - min[1], max[2] - min[2])
-  const position: [number, number, number] = preset === 'plan'
-    ? [center[0], center[1] - span * 1e-3, center[2] + span * 1.15]
-    : [center[0] - span * 0.6, center[1] - span * 1.0, center[2] + span * 0.85]
-  return { position: worldToScene(position), target: worldToScene(center) }
+  const dot = (a: ScenePoint, b: ScenePoint) => a.reduce((sum, v, i) => sum + v * b[i], 0)
+  const normalize = (v: ScenePoint): ScenePoint => v.map(n => n / Math.hypot(...v)) as ScenePoint
+  const cross = (a: ScenePoint, b: ScenePoint): ScenePoint => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]
+  const direction = normalize(worldToScene(preset === 'plan' ? [0, -0.001, 1] : [-0.6, -1, 0.85]))
+  const right = normalize(cross([0, 1, 0], direction))
+  const up = cross(direction, right)
+  const target = worldToScene(center)
+  const tangent = Math.tan(Math.PI / 8) // Canvas uses a 45-degree vertical field of view.
+  const safeAspect = Number.isFinite(aspect) && aspect > 0 ? aspect : 1.5
+  let distance = 0
+  // Fit every corner in the actual canvas, leaving room for outline and labels.
+  for (const x of [min[0], max[0]]) for (const y of [min[1], max[1]]) for (const z of [min[2], max[2]]) {
+    const offset = worldToScene([x-center[0], y-center[1], z-center[2]])
+    const depth = dot(offset, direction)
+    distance = Math.max(distance, depth + Math.abs(dot(offset, right)) * 1.15 / (tangent * safeAspect), depth + Math.abs(dot(offset, up)) * 1.15 / tangent)
+  }
+  return { position: target.map((value, axis) => value + direction[axis] * distance) as ScenePoint, target }
 }

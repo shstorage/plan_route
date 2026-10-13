@@ -1,0 +1,44 @@
+{
+  "retrieved_on": "2026-10-13",
+  "claim_scope": "Selected public requirements with authored applicability and normalization; no compliance certification",
+  "sources": [
+    {
+      "document_id": "UFGS-23-22-26-00-20",
+      "url": "https://www.wbdg.org/FFC/DOD/UFGS/UFGS%2023%2022%2026.00%2020.pdf",
+      "version": "02/2010, Change 1: 05/2015; retrieved references aligned with UMRL July 2026",
+      "kind": "US public-facility guide specification",
+      "clause": "3.1.1",
+      "pdf_page_1based": 24,
+      "values": {"nominal_size_threshold_mm": 100, "gap_small_m": 0.15, "gap_large_m": 0.25},
+      "scope": "Building heating steam and condensate; excludes main/process steam and boiler feed",
+      "interpretation": "Requiring the published gap outside finished insulation is an authored conservative policy; exact source surface definition is not established",
+      "verification": "Official PDF text and clause location read; PDF byte snapshot not retained"
+    },
+    {
+      "document_id": "OSHA-29-CFR-1910-303",
+      "url": "https://www.osha.gov/laws-regs/regulations/standardnumber/1910/1910.303",
+      "version": "Official page retrieved 2026-10-13",
+      "kind": "US occupational electrical regulation",
+      "clause": "g(1)(vii)(A)(1)-(4)",
+      "values": {"height_above_equipment_m": 1.83},
+      "scope": "Selected indoor switchboard, foreign piping, no applicable protective-isolation or sprinkler exception",
+      "interpretation": "Dedicated zone shares equipment footprint; ceiling clips its height. Closed-boundary exclusion is an authored interpretation",
+      "verification": "Official HTML clauses read; HTML byte snapshot not retained"
+    },
+    {
+      "document_id": "BHEL-PE-TS-425-166-A001",
+      "url": "https://www.bhel.com/sites/default/files/1-technical-specification-part-1-1511852976.pdf",
+      "version": "Cover REV 00, 25/10/2017; incorporated LP Piping chapter",
+      "kind": "Uppur 2x800 MW coal thermal-power project specification; not a universal law",
+      "clause": "13.5.3",
+      "pdf_page_1based": 83,
+      "printed_page": "Vol.III:304; combined footer Page 83 of 305",
+      "pdf_actual_page_count": 200,
+      "sha256": "a74fcbf69a5234c22a8b24145cc5ff95cdcd0da6a2228547c47df952184b887d",
+      "values": {"walkway_headroom_m": 2.5},
+      "scope": "LP overhead piping crossing a walkway; excludes roads, railways, buried piping, supports and thermal movement",
+      "interpretation": "Stationary insulated underside must be at least 2.5 m above walking surface. KEEP_OUT imposes a stricter no-touch condition",
+      "verification": "Downloaded official PDF; original glyph mapping decoded and PDF pages 76-84 inspected; search-index page numbering was not used"
+    }
+  ]
+}

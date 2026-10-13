@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { listProjects, type ProjectList } from '../api/client'
+import { listProjects, type ProjectList, type ProjectSummary } from '../api/client'
 
-export function ProjectLibrary({ active, refreshToken, currentId, busy, onLoad }: {
-  active: boolean; refreshToken: number; currentId: string; busy: boolean; onLoad: (id: string) => void
+export function ProjectLibrary({ active, refreshToken, currentId, busy, onLoad, onDelete }: {
+  active: boolean; refreshToken: number; currentId: string; busy: boolean; onLoad: (id: string) => void; onDelete: (project: ProjectSummary) => void
 }) {
   const [list, setList] = useState<ProjectList>({ projects: [], issues: [] })
   const [loading, setLoading] = useState(active)
@@ -37,8 +37,12 @@ export function ProjectLibrary({ active, refreshToken, currentId, busy, onLoad }
     <ul className="saved-project-list">{visible.map((item) => <li key={item.project_id} data-project-id={item.project_id}>
       <div><strong>{item.project_name || item.project_id}</strong>{item.project_id === currentId && <span className="soft-badge">현재 작업</span>}
         <small>기기 {item.equipment_count} · 배관 {item.pipe_count} · 개정 {item.revision} · {new Date(item.updated_at).toLocaleString('ko-KR')}</small>
+        <small className="storage-filename">저장 파일: {item.project_id}.json</small>
       </div>
-      <button type="button" className="button-secondary" disabled={busy || loading || !!error} onClick={() => onLoad(item.project_id)}>불러오기</button>
+      <div className="library-row-actions">
+        <button type="button" className="button-secondary" disabled={busy || loading || !!error} onClick={() => onLoad(item.project_id)}>불러오기</button>
+        <button type="button" className="button-danger" disabled={busy || loading || !!error} aria-label={`${item.project_name || item.project_id} 저장 프로젝트 삭제`} onClick={() => onDelete(item)}>삭제</button>
+      </div>
     </li>)}</ul>
     {!!list.issues.length && <p className="library-error" role="alert">검증하지 못한 저장 파일 {list.issues.length}개: {list.issues.map((issue) => issue.filename).join(', ')}. 해당 파일은 목록에서 제외했습니다.</p>}
   </section>

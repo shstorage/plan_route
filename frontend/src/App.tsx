@@ -1,8 +1,9 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   API_BASE_URL,
   ApiError,
   approveRule,
+  deleteProject,
   exampleLabels,
   getExampleProject,
   getHealth,
@@ -18,9 +19,16 @@ import {
 import { PlanEditor, type EditorAction } from './editor/PlanEditor'
 import { ObjectInspector } from './editor/ObjectInspector'
 import { Popup } from './ui/Popup'
+import { DetachedView } from './ui/DetachedView'
+import { openDetachedWindow, type CompanionView, type DetachedTarget } from './ui/detachedWindow'
 import { onTabKeyDown } from './ui/tabs'
 import { NewProjectDialog, ProjectActions } from './ui/ProjectActions'
 import { ProjectLibrary } from './ui/ProjectLibrary'
+import { DeleteProjectDialog } from './ui/DeleteProjectDialog'
+import { ToolIcon } from './ui/ToolIcon'
+import type { ProjectSummary } from './api/client'
+import { UnsavedChangesDialog } from './ui/UnsavedChangesDialog'
+import { hasUnsavedChanges, projectSignature } from './ui/projectChanges'
 import { routeFailureText } from './editor/routeFeedback'
 import { copyExampleProject, createBlankProject, findWaypoint, renameProject, type Selection } from './editor/model.ts'
 import { pushHistory, redoHistory, undoHistory, type History } from './editor/history.ts'
@@ -41,7 +49,7 @@ type Notice = {
   details?: ValidationIssue[]
 }
 
-type Operation = 'demo' | 'validate' | 'solve' | 'save' | 'load' | 'approve' | null
+type Operation = 'demo' | 'validate' | 'solve' | 'save' | 'load' | 'approve' | 'delete' | null
 
 type ProjectOverview = {
   id: string
@@ -145,6 +153,7 @@ function App() {
   const [initialProject] = useState(() => createBlankProject(`SYNTH-NEW-${Date.now()}`, '새 프로젝트'))
   const [projectText, setProjectText] = useState(() => JSON.stringify(initialProject, null, 2))
   const [editorProject, setEditorProject] = useState<EngineeringProject | null>(initialProject)
+  const [projectNameDraft, setProjectNameDraft] = useState(initialProject.project_name ?? initialProject.project_id)
   const [past, setPast] = useState<string[]>([])
   const [future, setFuture] = useState<string[]>([])
   const [example, setExample] = useState<ExampleProject>('starter')
@@ -163,13 +172,81 @@ function App() {
   const [activeTab, setActiveTab] = useState<'2d' | '3d' | 'project' | 'results'>('2d')
   const [projectSection, setProjectSection] = useState<'storage' | 'json'>('storage')
   const [companionView, setCompanionView] = useState<'2d' | '3d' | null>(null)
+  const [detachedViews, setDetachedViews] = useState<Partial<Record<CompanionView, DetachedTarget>>>({})
+  const [pendingDelete, setPendingDelete] = useState<ProjectSummary | null>(null)
+  const [deleteError, setDeleteError] = useState('')
+  const [deletedProjectIds, setDeletedProjectIds] = useState<Set<string>>(() => new Set())
   const [editorAction, setEditorAction] = useState<EditorAction | null>(null)
   const [newProjectOpen, setNewProjectOpen] = useState(false)
+  const [pendingReplacement, setPendingReplacement] = useState<{ action: string; proceed: () => void } | null>(null)
+  const [replacementError, setReplacementError] = useState('')
   const overview = useMemo(() => overviewFromText(projectText), [projectText])
   const dirty = useMemo(() => {
-    try { return savedSignature !== JSON.stringify(JSON.parse(projectText)) }
-    catch { return true }
+    const signature = projectSignature(projectText)
+    return signature === null || savedSignature !== signature
   }, [projectText, savedSignature])
+  const nameChanged = !!editorProject && projectNameDraft !== (editorProject.project_name ?? editorProject.project_id)
+  const unsaved = hasUnsavedChanges(projectText, savedSignature, JSON.stringify(initialProject), nameChanged, deletedProjectIds.has(editorProject?.project_id ?? ''))
+  const closeDetached = useCallback((view: CompanionView, target: DetachedTarget) => {
+    setDetachedViews((current) => {
+      if (current[view] !== target) return current
+      const next = { ...current }
+      delete next[view]
+      return next
+    })
+  }, [])
+
+  function detach(view: CompanionView) {
+    const existing = detachedViews[view]
+    if (existing && !existing.window.closed) { existing.window.focus(); setCompanionView(null); return }
+    const target = openDetachedWindow()
+    if (!target) {
+      setNotice({ kind: 'error', title: '새 창을 열지 못했습니다', message: '브라우저가 새 창을 차단했습니다. 이 사이트의 팝업을 허용한 뒤 다시 눌러 주세요.' })
+      return
+    }
+    setDetachedViews((current) => ({ ...current, [view]: target }))
+    setCompanionView(null)
+  }
+
+  function returnToMain(view: CompanionView, target: DetachedTarget) {
+    setActiveTab(view)
+    setCompanionView(null)
+    closeDetached(view, target)
+    target.window.close()
+    window.focus()
+    const modal = document.querySelector<HTMLDialogElement>('dialog:modal')
+    if (modal) { modal.focus(); return }
+    document.querySelector<HTMLButtonElement>(`#tab-${view}`)?.focus({ preventScroll: true })
+    document.querySelector('.workspace-nav')?.scrollIntoView({ block: 'start' })
+  }
+
+  async function confirmProjectDelete() {
+    if (!pendingDelete || operation) return
+    const selected = pendingDelete
+    setOperation('delete')
+    setDeleteError('')
+    try {
+      await deleteProject(selected.project_id, selected.revision)
+      savedDocuments.current.delete(selected.project_id)
+      setDeletedProjectIds((ids) => new Set(ids).add(selected.project_id))
+      if (selected.project_id === editorProject?.project_id) {
+        setSavedSignature(null)
+        setSavedMeta(null)
+      }
+      setLibraryRefresh((value) => value + 1)
+      setPendingDelete(null)
+      setNotice({ kind: 'success', title: '저장 프로젝트 삭제 완료', message: `${selected.project_name || selected.project_id}의 저장 파일을 삭제했습니다. 현재 편집 내용은 유지됩니다.` })
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : '저장 파일을 삭제하지 못했습니다.')
+    } finally { setOperation(null) }
+  }
+
+  useEffect(() => {
+    if (!unsaved) return
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = 'true' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [unsaved])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -204,6 +281,7 @@ function App() {
     projectRevision.current++
     setProjectText(JSON.stringify(project, null, 2))
     setEditorProject(project)
+    setProjectNameDraft(project.project_name ?? project.project_id)
     setPast([])
     setFuture([])
     setSelection(null)
@@ -232,6 +310,9 @@ function App() {
     setFuture(history.future)
     setProjectText(history.present)
     const project = JSON.parse(history.present) as EngineeringProject
+    if (project.project_name !== editorProject?.project_name || project.project_id !== editorProject?.project_id) {
+      setProjectNameDraft(project.project_name ?? project.project_id)
+    }
     if (project.project_id !== editorProject?.project_id) {
       const previousSaved = savedDocuments.current.get(project.project_id)
       setSavedSignature(previousSaved?.signature ?? null)
@@ -269,11 +350,12 @@ function App() {
   }
 
   async function run(name: Exclude<Operation, null>, task: () => Promise<void>) {
-    if (operation) return
+    if (operation) return false
     setOperation(name)
     setNotice(null)
     try {
       await task()
+      return true
     } catch (error) {
       setNotice({
         kind: 'error',
@@ -281,6 +363,7 @@ function App() {
         message: error instanceof Error ? error.message : '요청을 처리하지 못했습니다.',
         details: error instanceof ApiError ? error.details : undefined,
       })
+      return false
     } finally {
       setOperation(null)
     }
@@ -314,16 +397,38 @@ function App() {
   }
 
   function saveNamedProject(name: string) {
-    void run('save', async () => {
-      if (!editorProject) throw new Error('JSON 편집 탭에서 입력을 먼저 검증해 주세요.')
-      const named = renameProject(editorProject, name)
-      if (named.project_name !== editorProject.project_name) commitEditorProject(named)
+    void saveCurrentProject(name)
+  }
+
+  async function saveCurrentProject(name = projectNameDraft): Promise<boolean> {
+    return run('save', async () => {
+      // Capture exactly what is sent; never label a later edit as saved.
+      const named = editorProject ? renameProject(editorProject, name) : editedProject() as EngineeringProject
+      if (editorProject && named.project_name !== editorProject.project_name) commitEditorProject(named)
       const saved = await saveProject(named)
       rememberSaved(named, { revision: saved.revision, updatedAt: saved.updated_at })
       setLibraryRefresh((value) => value + 1)
       setLookupId(saved.project_id)
-      setNotice({ kind: 'success', title: '서버에 저장됨', message: `${named.project_name} · 개정 ${saved.revision} · ${formatDate(saved.updated_at)}` })
+      setNotice({ kind: 'success', title: '서버에 저장됨', message: `${named.project_name ?? named.project_id} · ${saved.project_id}.json · 개정 ${saved.revision} · ${formatDate(saved.updated_at)}` })
     })
+  }
+
+  function requestReplacement(action: string, proceed: () => void) {
+    if (operation) return
+    if (!unsaved) { proceed(); return }
+    setReplacementError('')
+    setPendingReplacement({ action, proceed })
+  }
+
+  async function saveBeforeReplacement() {
+    const pending = pendingReplacement
+    if (!pending || operation) return
+    if (!await saveCurrentProject()) {
+      setReplacementError('저장하지 못해 화면을 전환하지 않았습니다. 서버 연결, 프로젝트 이름 또는 JSON을 확인한 뒤 다시 시도해 주세요.')
+      return
+    }
+    setPendingReplacement(null)
+    pending.proceed()
   }
 
   function rememberSaved(project: EngineeringProject, meta: { revision: number; updatedAt: string }) {
@@ -331,17 +436,23 @@ function App() {
     savedDocuments.current.set(project.project_id, { signature, meta })
     setSavedSignature(signature)
     setSavedMeta(meta)
+    setDeletedProjectIds((ids) => {
+      if (!ids.has(project.project_id)) return ids
+      const next = new Set(ids)
+      next.delete(project.project_id)
+      return next
+    })
   }
 
   function openSavedProject(id: string) {
-    void run('load', async () => {
+    requestReplacement('저장 프로젝트를 불러오기', () => { void run('load', async () => {
       const loaded = await loadProject(id)
       applyProject(loaded.project)
       rememberSaved(loaded.project, { revision: loaded.revision, updatedAt: loaded.updatedAt })
       setActiveTab('2d')
       setCompanionView(null)
       setNotice({ kind: 'success', title: '프로젝트 불러오기 완료', message: `${loaded.project.project_name ?? loaded.project.project_id} · 개정 ${loaded.revision}` })
-    })
+    }) })
   }
 
   const viewer = editorProject && <Suspense fallback={<div className="viewer-loading">3D 보기 불러오는 중…</div>}><Viewer3D
@@ -363,6 +474,11 @@ function App() {
     onFocusRule={(id) => { setFocusRuleId(id); setActiveTab('2d'); setCompanionView(null) }}
     onAddRule={(targetId) => editInPlan({ kind: 'add-rule', targetId })}
   />
+
+  function companionContent(view: CompanionView) {
+    if (!editorProject) return <p className="panel">메인 창의 프로젝트 탭에서 JSON을 검증하면 보기를 다시 표시합니다.</p>
+    return view === '3d' ? viewer : <PlanEditor companion project={editorProject} route={route?.pipe_id === selectedPipeId ? route : null} selectedPipeId={selectedPipeId} selection={selection} onSelectionChange={selectObject} focusRuleId={focusRuleId} onFocusRule={setFocusRuleId} busy={operation !== null} canUndo={past.length > 0} canRedo={future.length > 0} onUndo={undoEditor} onRedo={redoEditor} onCommit={commitEditorProject} onApproveRule={(project, ruleId, reviewer) => { void run('approve', async () => commitEditorProject(await approveRule(project, ruleId, reviewer))) }} onSelectPipe={(id) => { setSelectedPipeId(id); setRoute(null) }} onSolve={() => { void run('solve', async () => setRoute(await solveRoute(editedProject(), selectedPipeId))) }} solving={operation === 'solve'} />
+  }
 
   return (
     <div className="app-shell">
@@ -389,11 +505,19 @@ function App() {
           </div>
         </section>
 
-        <ProjectActions name={editorProject?.project_name ?? editorProject?.project_id ?? ''} dirty={dirty} busy={operation !== null} canSave={!!editorProject} onSave={saveNamedProject} onNew={() => setNewProjectOpen(true)} onRename={(name) => {
+        <ProjectActions name={editorProject?.project_name ?? editorProject?.project_id ?? ''} draft={projectNameDraft} onDraftChange={setProjectNameDraft} dirty={dirty} busy={operation !== null} canSave={!!editorProject} onSave={saveNamedProject} onNew={() => setNewProjectOpen(true)} onRename={(name) => {
           try { if (editorProject) commitEditorProject(renameProject(editorProject, name)) }
           catch (error) { setNotice({ kind: 'error', title: '이름 변경 실패', message: error instanceof Error ? error.message : '프로젝트 이름을 확인해 주세요.' }) }
         }} />
-        {newProjectOpen && <NewProjectDialog onClose={() => setNewProjectOpen(false)} onCreate={createProject} />}
+        {newProjectOpen && <NewProjectDialog onClose={() => setNewProjectOpen(false)} onCreate={(name) => {
+          setNewProjectOpen(false)
+          requestReplacement('새 프로젝트를 만들기', () => createProject(name))
+        }} />}
+        {pendingReplacement && <UnsavedChangesDialog action={pendingReplacement.action} busy={operation !== null} error={replacementError}
+          onSave={() => { void saveBeforeReplacement() }} onCancel={() => setPendingReplacement(null)}
+          onDiscard={() => { const pending = pendingReplacement; setPendingReplacement(null); pending.proceed() }} />}
+        {pendingDelete && <DeleteProjectDialog project={pendingDelete} current={pendingDelete.project_id === editorProject?.project_id} busy={operation !== null} error={deleteError}
+          onDelete={() => { void confirmProjectDelete() }} onCancel={() => setPendingDelete(null)} />}
 
         {connection.status === 'error' && (
           <div className="banner error" role="alert">
@@ -410,7 +534,10 @@ function App() {
           <div className="workspace-tabs" role="tablist" aria-label="작업 탭" onKeyDown={onTabKeyDown}>{([
             ['2d', '2D 배치'], ['3d', '3D 보기'], ['project', '프로젝트'], ['results', '계산 결과'],
           ] as const).map(([id, label]) => <button type="button" role="tab" id={`tab-${id}`} aria-controls={`view-${id}`} aria-selected={activeTab === id} tabIndex={activeTab === id ? 0 : -1} key={id} onClick={() => { setActiveTab(id); setCompanionView(null) }}>{label}</button>)}</div>
-          {(activeTab === '2d' || activeTab === '3d') && <button className="button-secondary" type="button" disabled={!editorProject} onClick={() => setCompanionView(activeTab === '2d' ? '3d' : '2d')}>↗ {activeTab === '2d' ? '3D' : '2D'} 보조 보기</button>}
+          {(activeTab === '2d' || activeTab === '3d') && <div className="view-window-actions" role="group" aria-label="추가 보기">
+            <button className="button-secondary" type="button" title="현재 화면 안에서 두 보기를 함께 사용합니다." disabled={!editorProject} onClick={() => setCompanionView(activeTab === '2d' ? '3d' : '2d')}><ToolIcon kind="companion" />{activeTab === '2d' ? '3D' : '2D'} 함께 보기</button>
+            <button className="button-secondary" type="button" title="별도 브라우저 창으로 열어 다른 모니터에서도 사용합니다." disabled={!editorProject} onClick={() => detach(activeTab === '2d' ? '3d' : '2d')}><ToolIcon kind="external" />{activeTab === '2d' ? '3D' : '2D'} 새 창</button>
+          </div>}
         </nav>
 
         {notice && <div className={`banner ${notice.kind} editor-notice`} role={notice.kind === 'error' ? 'alert' : 'status'}>
@@ -454,16 +581,19 @@ function App() {
         <div role="tabpanel" id="view-3d" aria-labelledby="tab-3d" hidden={activeTab !== '3d'}>
           {activeTab === '3d' && editorProject ? <div className="three-workspace">{viewer}{inspector}</div> : !editorProject && <p className="panel">프로젝트 탭에서 JSON을 검증하면 3D를 볼 수 있습니다.</p>}
         </div>
-        {companionView && editorProject && <Popup title={`${companionView.toUpperCase()} 보조 보기`} companion onClose={() => setCompanionView(null)}>
-          {companionView === '3d' ? viewer : <PlanEditor project={editorProject} route={route?.pipe_id === selectedPipeId ? route : null} selectedPipeId={selectedPipeId} selection={selection} onSelectionChange={selectObject} focusRuleId={focusRuleId} onFocusRule={setFocusRuleId} busy={operation !== null} canUndo={past.length > 0} canRedo={future.length > 0} onUndo={undoEditor} onRedo={redoEditor} onCommit={commitEditorProject} onApproveRule={(project, ruleId, reviewer) => { void run('approve', async () => commitEditorProject(await approveRule(project, ruleId, reviewer))) }} onSelectPipe={(id) => { setSelectedPipeId(id); setRoute(null) }} onSolve={() => { void run('solve', async () => setRoute(await solveRoute(editedProject(), selectedPipeId))) }} solving={operation === 'solve'} />}
+        {companionView && editorProject && <Popup title={`${companionView.toUpperCase()} 보조 보기`} companion onDetach={() => detach(companionView)} onClose={() => setCompanionView(null)}>
+          {companionContent(companionView)}
         </Popup>}
+        {(['2d', '3d'] as const).map((view) => detachedViews[view] && <DetachedView key={view} view={view} target={detachedViews[view]} name={editorProject?.project_name ?? overview?.id ?? '프로젝트'} onClose={closeDetached} onReturn={returnToMain} locked={!!pendingReplacement || newProjectOpen || !!pendingDelete}>
+          {companionContent(view)}
+        </DetachedView>)}
 
         <section className="workspace tab-workspace" aria-label="프로젝트 작업대" hidden={activeTab !== 'project' && activeTab !== 'results'}>
           <div className="left-column" role="tabpanel" id="view-project" aria-labelledby="tab-project" hidden={activeTab !== 'project'}>
             <section className="panel project-panel">
               <div className="panel-heading">
                 <div><p className="step">01 / PROJECT</p><h2>프로젝트</h2></div>
-                <span className="soft-badge">{dirty ? '저장되지 않은 변경 있음' : '저장됨'}</span>
+                <span className="soft-badge">{dirty || nameChanged ? '저장되지 않은 변경 있음' : '저장됨'}</span>
               </div>
               <div className="inspector-tabs project-section-tabs" role="tablist" aria-label="프로젝트 관리 항목" onKeyDown={onTabKeyDown}>
                 <button type="button" role="tab" aria-selected={projectSection === 'storage'} tabIndex={projectSection === 'storage' ? 0 : -1} onClick={() => setProjectSection('storage')}>저장·불러오기</button>
@@ -475,7 +605,7 @@ function App() {
                 <select aria-label="합성 예제" value={example} disabled={operation !== null} onChange={(event) => setExample(event.target.value as ExampleProject)}>
                   {(Object.keys(exampleLabels) as ExampleProject[]).map((name) => <option key={name} value={name}>{exampleLabels[name]}</option>)}
                 </select>
-                <button type="button" className="button-secondary" disabled={operation !== null} onClick={() => run('demo', async () => {
+                <button type="button" className="button-secondary" disabled={operation !== null} onClick={() => requestReplacement('예제를 불러오기', () => { void run('demo', async () => {
                   const original = await getExampleProject(example)
                   const project = copyExampleProject(original, `SYNTH-COPY-${Date.now()}`, `${exampleLabels[example]} 복사본`)
                   applyProject(project)
@@ -483,16 +613,10 @@ function App() {
                   setActiveTab('2d')
                   setCompanionView(null)
                   setNotice({ kind: 'success', title: '예제 준비 완료', message: '예제의 작업 복사본을 열었습니다. 기기를 추가하고 저장하면 저장 목록에서 다시 열 수 있습니다. 예제 원본은 유지됩니다.' })
-                })}>예제 불러오기</button>
-                <button type="button" className="button-secondary" disabled={operation !== null || !projectText} onClick={() => run('save', async () => {
-                  const saved = await saveProject(editedProject())
-                  rememberSaved(editedProject() as EngineeringProject, { revision: saved.revision, updatedAt: saved.updated_at })
-                  setLibraryRefresh((value) => value + 1)
-                  setLookupId(saved.project_id)
-                  setNotice({ kind: 'success', title: '서버에 저장됨', message: `${saved.project_id} · 개정 ${saved.revision} · ${formatDate(saved.updated_at)}` })
-                })}>서버에 저장</button>
+                }) })}>예제 불러오기</button>
+                <button type="button" className="button-secondary" disabled={operation !== null || !projectText} onClick={() => { void saveCurrentProject() }}>서버에 저장</button>
               </div>
-              <ProjectLibrary active={activeTab === 'project' && projectSection === 'storage'} refreshToken={libraryRefresh} currentId={editorProject?.project_id ?? ''} busy={operation !== null} onLoad={openSavedProject} />
+              <ProjectLibrary active={activeTab === 'project' && projectSection === 'storage'} refreshToken={libraryRefresh} currentId={editorProject?.project_id ?? ''} busy={operation !== null} onLoad={openSavedProject} onDelete={(project) => { setDeleteError(''); setPendingDelete(project) }} />
               <details className="inspector-details"><summary>프로젝트 ID로 직접 불러오기</summary><div className="load-row">
                 <label htmlFor="project-id">저장된 프로젝트 ID</label>
                 <div>
@@ -502,10 +626,16 @@ function App() {
               </div></details>
               <div className="overview-grid" aria-label="프로젝트 요약">
                 <div><span>현재 프로젝트 이름</span><strong>{editorProject?.project_name ?? overview?.id ?? '—'}</strong></div>
+                <div><span>프로젝트 ID</span><strong>{overview?.id ?? '—'}</strong></div>
                 <div><span>스키마</span><strong>{overview?.schemaVersion ?? '—'}</strong></div>
                 <div><span>장애물 / Zone</span><strong>{overview ? `${overview.obstacles} / ${overview.zones}` : '—'}</strong></div>
                 <div><span>배관 / 규칙</span><strong>{overview ? `${overview.pipeIds.length} / ${overview.constraints}` : '—'}</strong></div>
               </div>
+              {overview && <div className="project-storage-info">
+                <p><strong>{savedMeta ? '저장 파일' : '저장 시 사용할 파일'}:</strong> <code>data/projects/{overview.id}.json</code></p>
+                <p>{savedMeta ? '이름을 바꿔 저장해도 같은 파일을 갱신하고 개정 번호를 올립니다.' : '아직 이 화면에서 저장·불러오기를 완료하지 않았습니다. 프로젝트 저장을 눌러 파일을 보존하세요.'}</p>
+                <p>저장 위치는 API 서버의 프로젝트 폴더입니다. 한글 프로젝트 이름은 파일 내부에 보관합니다.</p>
+              </div>}
               {savedMeta && <p className="saved-meta">{dirty ? '마지막 저장' : '저장'} 개정 {savedMeta.revision} · {formatDate(savedMeta.updatedAt)}{dirty ? ' · 현재 수정은 아직 저장되지 않았습니다.' : ''}</p>}
               </div>
               <div hidden={projectSection !== 'json'}>
@@ -538,6 +668,8 @@ function App() {
                   const result = await validateProject(editedProject())
                   setValidatedId(result.project_id)
                   setEditorProject(editedProject() as EngineeringProject)
+                  const project = editedProject() as EngineeringProject
+                  setProjectNameDraft(project.project_name ?? project.project_id)
                   setNotice({ kind: 'success', title: '스키마 검증 통과', message: `${result.project_id} · 버전 ${result.schema_version}` })
                 })}>JSON 검증</button>
                 <span>{validatedId ? `검증 완료 · ${validatedId}` : '변경한 JSON은 검증 후 실행하세요.'}</span>

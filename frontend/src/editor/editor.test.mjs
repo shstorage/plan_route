@@ -15,6 +15,52 @@ import {
 } from './model.ts'
 import { pushHistory, redoHistory, startHistory, undoHistory } from './history.ts'
 import { failedPortId, routeFailureText } from './routeFeedback.ts'
+import { hasUnsavedChanges, projectSignature } from '../ui/projectChanges.ts'
+import { fitPopup, resizePopup } from '../ui/popupGeometry.ts'
+
+test('unsaved protection distinguishes untouched startup, named new work, invalid JSON, and saved undo', () => {
+  const initial = JSON.stringify({ project_id: 'INITIAL', project_name: '새 프로젝트' })
+  assert.equal(hasUnsavedChanges(initial, null, initial, false), false)
+  assert.equal(hasUnsavedChanges(initial, null, initial, true), true, 'name draft warns before blur')
+  const edited = JSON.stringify({ project_id: 'NEW', project_name: '한글' })
+  assert.equal(hasUnsavedChanges(edited, null, initial, false), true)
+  assert.equal(hasUnsavedChanges(edited, edited, initial, false), false)
+  assert.equal(hasUnsavedChanges(initial, edited, initial, false), true)
+  assert.equal(hasUnsavedChanges('invalid', null, initial, false), true)
+  assert.equal(hasUnsavedChanges(JSON.stringify(JSON.parse(edited), null, 2), edited, initial, false), false)
+  assert.equal(projectSignature('invalid'), null)
+})
+
+test('deleting a saved startup document warns before leaving until it is saved again', () => {
+  const startup = JSON.stringify({ project_id: 'INITIAL' })
+  assert.equal(hasUnsavedChanges(startup, null, startup, false), false)
+  assert.equal(hasUnsavedChanges(startup, null, startup, false, true), true)
+  assert.equal(hasUnsavedChanges(startup, startup, startup, false, false), false)
+})
+
+test('popup bounds keep heading and resize control inside desktop and mobile viewports', () => {
+  const large = fitPopup({ left: 1300, top: 950, width: 900, height: 700 }, { width: 1440, height: 1000 })
+  assert.deepEqual(large, { left: 540, top: 300, width: 900, height: 700 })
+  assert.deepEqual(fitPopup({ left: -20, top: -30, width: 2000, height: 2000 }, { width: 390, height: 844 }), { left: 0, top: 0, width: 390, height: 844 })
+  assert.deepEqual(fitPopup({ left: 30, top: 40, width: 10, height: 10 }, { width: 1440, height: 1000 }), { left: 30, top: 40, width: 480, height: 320 })
+})
+
+test('all eight resize directions anchor opposite edges and preserve size at viewport boundaries', () => {
+  const start = { left: 200, top: 150, width: 700, height: 500 }
+  const viewport = { width: 1440, height: 1000 }
+  for (const edge of ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']) {
+    const next = resizePopup(start, edge, 40, 30, viewport)
+    if (edge.includes('w')) assert.equal(next.left + next.width, start.left + start.width)
+    else assert.equal(next.left, start.left)
+    if (edge.includes('n')) assert.equal(next.top + next.height, start.top + start.height)
+    else assert.equal(next.top, start.top)
+    assert.equal(next.width, edge.includes('w') ? 660 : edge.includes('e') ? 740 : 700)
+    assert.equal(next.height, edge.includes('n') ? 470 : edge.includes('s') ? 530 : 500)
+  }
+  assert.deepEqual(resizePopup(start, 'nw', 1000, 1000, viewport), { left: 420, top: 330, width: 480, height: 320 })
+  assert.deepEqual(resizePopup(start, 'nw', -1000, -1000, viewport), { left: 0, top: 0, width: 900, height: 650 })
+  assert.deepEqual(resizePopup(start, 'se', 2000, 2000, viewport), { left: 200, top: 150, width: 1240, height: 850 })
+})
 
 const fixture = new URL('../../../src/plan_route/fixtures/demo_project.json', import.meta.url)
 // The fixture lives at the repository root, outside frontend/src/editor.

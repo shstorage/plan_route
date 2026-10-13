@@ -1,0 +1,165 @@
+{
+  "schema_version": "1.0.0",
+  "project_id": "P10D-ELECTRICAL",
+  "study_type": "synthetic_benchmark",
+  "unit_system": "SI",
+  "coordinate_frame": {
+    "name": "SYNTHETIC",
+    "unit": "m",
+    "up_axis": "z",
+    "origin_m": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "building": {
+    "bounds_m": {
+      "type": "aabb",
+      "min_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_m": [
+        6.0,
+        4.0,
+        4.0
+      ]
+    },
+    "floors": [
+      {
+        "id": "L1",
+        "z_min_m": 0.0,
+        "z_max_m": 4.0
+      }
+    ]
+  },
+  "obstacles": [
+    {
+      "id": "CABINET",
+      "kind": "electrical_cabinet",
+      "shape": {
+        "type": "aabb",
+        "min_m": [
+          2.5,
+          1.0,
+          0.0
+        ],
+        "max_m": [
+          3.5,
+          2.5,
+          1.0
+        ]
+      }
+    }
+  ],
+  "zones": [
+    {
+      "id": "DEDICATED-SPACE",
+      "zone_type": "electrical_dedicated",
+      "shape": {
+        "type": "aabb",
+        "min_m": [
+          2.5,
+          1.0,
+          0.0
+        ],
+        "max_m": [
+          3.5,
+          2.5,
+          2.83
+        ]
+      }
+    }
+  ],
+  "equipment": [
+    {
+      "id": "EQ-A",
+      "kind": "synthetic_terminal",
+      "geometry_ref": null,
+      "ports": [
+        {
+          "id": "PORT-A",
+          "position_m": [
+            0.75,
+            1.25,
+            1.75
+          ],
+          "orientation": "+x"
+        }
+      ]
+    },
+    {
+      "id": "EQ-B",
+      "kind": "synthetic_terminal",
+      "geometry_ref": null,
+      "ports": [
+        {
+          "id": "PORT-B",
+          "position_m": [
+            4.75,
+            1.25,
+            1.75
+          ],
+          "orientation": "-x"
+        }
+      ]
+    }
+  ],
+  "pipes": [
+    {
+      "id": "PIPE-101",
+      "from_port_id": "PORT-A",
+      "to_port_id": "PORT-B",
+      "outer_diameter_m": 0.1143,
+      "insulation_thickness_m": 0.04,
+      "clearance_margin_m": 0.0,
+      "train_id": null,
+      "waypoints": []
+    }
+  ],
+  "constraints": [
+    {
+      "id": "RULE-PUBLIC",
+      "type": "KEEP_OUT",
+      "severity": "hard",
+      "scope": {
+        "pipe_ids": [
+          "PIPE-101"
+        ],
+        "target_ids": [
+          "DEDICATED-SPACE"
+        ]
+      },
+      "parameters": {
+        "distance_m": null,
+        "distance_basis": null
+      },
+      "source": {
+        "source_type": "public_reference",
+        "document_id": "OSHA-29-CFR-1910-303",
+        "document_revision": "accessed-2026-10-13",
+        "clause_id": "G-1-VII-A-1",
+        "evidence_text": "Indoor switchboard dedicated space; unprotected foreign piping only. Synthetic closed-boundary interpretation; exceptions excluded."
+      },
+      "status": "draft",
+      "approved_by": null,
+      "approved_at": null,
+      "definition_revision": 1,
+      "approved_content_sha256": null,
+      "approval_history": []
+    }
+  ],
+  "routing_config": {
+    "grid_resolution_m": 0.5,
+    "cost_weights": {
+      "length_per_m": 1.0,
+      "bend_per_event": 2.0,
+      "preferred_zone_factor": 1.0
+    },
+    "search_limits": {
+      "max_expansions": 400000
+    }
+  }
+}

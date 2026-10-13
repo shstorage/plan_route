@@ -328,6 +328,10 @@ export async function solveRoute(project: unknown, pipeId: string): Promise<Rout
   )
 }
 
+export async function deleteProject(projectId: string, revision: number): Promise<void> {
+  await requestJson(`/api/projects/${encodeURIComponent(projectId)}?expected_revision=${revision}`, { method: 'DELETE' })
+}
+
 export async function approveRule(project: EngineeringProject, ruleId: string, reviewer: string): Promise<EngineeringProject> {
   return requireProject(await requestJson('/api/constraints/approve', jsonRequest({
     project, rule_id: ruleId, approved_by: reviewer,

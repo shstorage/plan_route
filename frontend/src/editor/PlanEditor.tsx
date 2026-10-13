@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import Konva from 'konva'
 import { Stage, Layer, Rect, Line, Arrow, Circle, Text, RegularPolygon } from 'react-konva'
 import { Popup } from '../ui/Popup'
+import { useHostWindow } from '../ui/HostWindow'
 import { ToolIcon } from '../ui/ToolIcon'
 import type { EngineeringProject, Point3, RouteSolveReport } from '../api/client'
 import { fitView, planToWorld, screenToWorld, snapMeters, worldBoxToPlan, worldToPlan, zoomAt, type PlanView } from './coordinates.ts'
@@ -39,6 +40,7 @@ type Props = {
   onSolve: () => void
   solving: boolean
   action?: EditorAction | null
+  companion?: boolean
 }
 
 type Draft = { kind: BoxKind; start: Point3; end: Point3 }
@@ -47,8 +49,9 @@ const HEIGHT = 540
 const corners: Corner[] = ['nw', 'ne', 'sw', 'se']
 
 export function PlanEditor({
-  project, route, selectedPipeId, selection, onSelectionChange: setSelection, focusRuleId, onFocusRule, busy, canUndo, canRedo, onUndo, onRedo, onCommit, onSelectPipe, onApproveRule, onSolve, solving, action,
+  project, route, selectedPipeId, selection, onSelectionChange: setSelection, focusRuleId, onFocusRule, busy, canUndo, canRedo, onUndo, onRedo, onCommit, onSelectPipe, onApproveRule, onSolve, solving, action, companion = false,
 }: Props) {
+  const host = useHostWindow()
   const viewportRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
   const [width, setWidth] = useState(860)
@@ -108,10 +111,10 @@ export function PlanEditor({
   useEffect(() => {
     if (!viewportRef.current) return
     let measuredWidth = 0, measuredHeight = 0
-    const observer = new ResizeObserver((entries) => {
+    const observer = new (host as Window & typeof globalThis).ResizeObserver((entries) => {
       if (entries[0].contentRect.width <= 0) return
       const nextWidth = Math.max(240, Math.floor(entries[0].contentRect.width))
-      const nextHeight = Math.max(300, Math.min(HEIGHT, Math.round(nextWidth * 0.66)))
+      const nextHeight = companion ? Math.max(300, Math.floor(entries[0].contentRect.height)) : Math.max(300, Math.min(HEIGHT, Math.round(nextWidth * 0.66)))
       if (nextWidth === measuredWidth && nextHeight === measuredHeight) return
       measuredWidth = nextWidth
       measuredHeight = nextHeight
@@ -121,7 +124,37 @@ export function PlanEditor({
     })
     observer.observe(viewportRef.current)
     return () => observer.disconnect()
-  }, [bounds])
+  }, [bounds, companion, host])
+
+  // Konva schedules batch draws in the main JS realm. Draw the portal on its own
+  // window's frame too, so resizing/editing still paints when the main RAF pauses.
+  useEffect(() => {
+    if (host === window) return
+    const frame = host.requestAnimationFrame(() => stageRef.current?.draw())
+    return () => host.cancelAnimationFrame(frame)
+  })
+  useEffect(() => {
+    if (host === window) return
+    let pressed = false, frame = 0
+    const down = () => { pressed = true }
+    const up = () => { pressed = false }
+    const draw = () => {
+      if (pressed) stageRef.current?.draw()
+      frame = host.requestAnimationFrame(draw)
+    }
+    host.document.addEventListener('pointerdown', down)
+    host.document.addEventListener('pointerup', up)
+    host.document.addEventListener('pointercancel', up)
+    host.addEventListener('blur', up)
+    frame = host.requestAnimationFrame(draw)
+    return () => {
+      host.cancelAnimationFrame(frame)
+      host.document.removeEventListener('pointerdown', down)
+      host.document.removeEventListener('pointerup', up)
+      host.document.removeEventListener('pointercancel', up)
+      host.removeEventListener('blur', up)
+    }
+  }, [host])
 
   const gridStep = useMemo(() => {
     let step = snapStep
@@ -190,7 +223,7 @@ export function PlanEditor({
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (!viewportRef.current?.checkVisibility() || document.querySelector('dialog:modal')) return
+      if (!viewportRef.current?.checkVisibility() || viewportRef.current.closest('[inert]') || host.document.querySelector('dialog:modal')) return
       if (event.key === 'Escape') { chooseMode('select'); setDraft(null); return }
       if (event.key !== 'Delete' && event.key !== 'Backspace') return
       const target = event.target as HTMLElement | null
@@ -199,8 +232,8 @@ export function PlanEditor({
       event.preventDefault()
       deleteSelected()
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    host.addEventListener('keydown', onKeyDown)
+    return () => host.removeEventListener('keydown', onKeyDown)
   })
 
   function pointerWorld(): Point3 | null {
@@ -368,7 +401,7 @@ export function PlanEditor({
       <div className="plan-body">
         <div className="plan-canvas-column">
           {anyPendingRule && <div className="plan-warning" role="status">미승인 규칙이 있습니다. 해당 배관은 승인 전 경로 실행이 거부됩니다.</div>}
-          <div className={`canvas-viewport mode-${mode}`} ref={viewportRef} style={{ height: height + 2 }}>
+          <div className={`canvas-viewport mode-${mode}`} ref={viewportRef} style={companion ? undefined : { height: height + 2 }}>
             {floor && <div className="floor-overlay" role="group" aria-label="표시 층">
               {project.building.floors.map((item) => (
                 <button key={item.id} type="button" className={item.id === floor.id ? 'active' : ''} aria-pressed={item.id === floor.id}

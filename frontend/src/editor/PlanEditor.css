@@ -1,4 +1,4 @@
-.plan-editor { margin: 0 0 22px; padding: 26px; }
+.plan-editor { margin: 0 0 22px; padding: 26px; container-type: inline-size; }
 .plan-run { display: flex; align-items: center; gap: 8px; }
 .plan-run select { max-width: 200px; padding: 8px; border: 1px solid #d2dfe6; border-radius: 7px; background: #fff; }
 .plan-editor .plan-toolbar { position: sticky; top: 8px; z-index: 4; background: #fff; padding: 8px 0; margin: 12px 0 4px; }
@@ -89,7 +89,13 @@
 .rule-source { color: #8296a3; font-size: 10px; line-height: 1.5; }
 .new-rule { margin-top: 17px; padding-top: 15px; border-top: 1px solid #dce6eb; }
 .new-rule > .inspector-form { margin-top: 14px; }
-@media (max-width: 1100px) { .plan-body { grid-template-columns: 1fr; } .editor-inspector { max-height: none; } }
+@container (max-width: 760px) { .plan-body { grid-template-columns: 1fr; } .editor-inspector { max-height: none; } }
+@container (max-width: 760px) {
+  .auxiliary-view .plan-editor .plan-body { display: flex; flex-direction: column; flex: none; min-height: 0; }
+  .auxiliary-view .plan-editor .plan-canvas-column { flex: none; min-height: 440px; }
+  .auxiliary-view .plan-editor .canvas-viewport { flex: none; height: 400px; }
+  .auxiliary-view .plan-editor .editor-inspector { flex: none; }
+}
 @media (max-width: 620px) { .plan-editor { padding: 18px; } .plan-heading { flex-direction: column; } .canvas-footer { flex-direction: column; } }
 .plan-error { position: absolute; z-index: 3; top: 10px; left: 10px; right: 64px; box-shadow: 0 4px 14px #9b2c2222; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 10px 12px; border: 1px solid #efb3ad; border-radius: 10px; background: #fff1ef; color: #9b2c22; font-size: 13px; }
 .plan-error strong { margin-right: 6px; }
